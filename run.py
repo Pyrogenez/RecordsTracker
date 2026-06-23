@@ -176,6 +176,7 @@ def main() -> int:
             log.info("Collected %d request(s) to scrape this run", len(summaries))
 
             requests_not_found = 0
+            detail_failures = 0
             for s in summaries:
                 log.info("Scraping %s (rid=%d, status=%s)", s.request_id, s.rid, s.status)
                 try:
@@ -188,6 +189,7 @@ def main() -> int:
                     )
                     continue
                 except Exception as e:  # noqa: BLE001
+                    detail_failures += 1
                     log.error("Failed to scrape %s: %s", s.request_id, e)
                     log.debug("%s", traceback.format_exc())
                     continue
@@ -257,6 +259,18 @@ def main() -> int:
                 # config.json. See records_tracker/human_delay.py.
                 human_delay.sleep_between_records(config.human_delay_records)
 
+            # If we had work to do but EVERY request failed to scrape, that's a
+            # systemic failure (lost session / portal HTML change), not a normal
+            # run. Make it loud: record the error so finish_run + `status` show
+            # it and the process exits non-zero — instead of a green "Done".
+            if summaries and requests_scraped == 0 and detail_failures > 0:
+                error_msg = (
+                    f"All {detail_failures} request(s) failed to scrape (no "
+                    "identifying fields returned). Likely a lost session or a "
+                    "change in the portal's HTML — check the latest log in logs/."
+                )
+                log.error(error_msg)
+
     except Exception as e:  # noqa: BLE001
         error_msg = f"{type(e).__name__}: {e}"
         log.exception("Run failed")
@@ -281,10 +295,11 @@ def main() -> int:
         db.close()
 
     log.info(
-        "Done. mode=%s scraped=%d skipped=%d not_found=%d "
+        "Done. mode=%s scraped=%d skipped=%d not_found=%d failed=%d "
         "new_req=%d new_msg=%d new_att=%d",
         mode, requests_scraped, requests_skipped,
         locals().get("requests_not_found", 0),
+        locals().get("detail_failures", 0),
         new_requests, new_messages, new_attachments,
     )
     return 0 if error_msg is None else 1
@@ -424,10 +439,12 @@ def _summaries_from_ids_file(
         )
     if rid_only_count:
         log.warning(
-            "%d line(s) were rid-only (numeric). They were imported with a "
-            "placeholder request_id of 'P<rid>'. Re-running `python run.py "
-            "--full` later will upsert the canonical 'P<rid>-MMDDYY' key from "
-            "the listing page if those requests appear there.",
+            "%d line(s) were rid-only (numeric). Each was imported under a "
+            "placeholder request_id 'P<rid>' (the canonical key is "
+            "'P<rid>-MMDDYY'). On a later `--full` run the placeholder is "
+            "automatically reconciled to the canonical key IF it has no "
+            "messages/attachments yet; once it has children it stays under the "
+            "placeholder key. Prefer importing full IDs to avoid this.",
             rid_only_count,
         )
     log.info("Loaded %d unique request ID(s) from %s", len(summaries), path)

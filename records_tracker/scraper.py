@@ -540,7 +540,6 @@ class PortalScraper:
                 }
                 return {
                   ref: (a.innerText || '').trim(),
-                  category: get('DxIssueTextLnk'),
                   requester: get('primaryCustomer'),
                   stage:    get('divHyperlink'),
                   detail_url: detailUrl,
@@ -575,6 +574,21 @@ class PortalScraper:
                 final_state=stage,       # used for closed-request detection
                 detail_url=detail_url,
             ))
+        if not summaries:
+            # Zero cards parsed. If the list container IS present, this is a
+            # render race / partial load / changed card-id scheme — NOT a
+            # legitimately empty portal. Warn loudly (but don't hard-error, so a
+            # genuinely empty/new account still completes cleanly).
+            try:
+                present = self._list_present()
+            except Exception:
+                present = False
+            if present:
+                log.warning(
+                    "Listing container present but zero request cards parsed — "
+                    "possible render race or changed card-id scheme. URL: %s",
+                    _scrub(self.page.url),
+                )
         return summaries
 
     def _absolutize(self, url: str) -> str:
@@ -634,6 +648,7 @@ class PortalScraper:
 
         pick = self._choose_next_pager_item(cur, items)
         if pick is None:
+            # Genuinely the last page — the ONLY clean "stop paginating" signal.
             log.info(
                 "Pagination: end of list (current=%s, visible=%s)",
                 cur,
@@ -641,36 +656,44 @@ class PortalScraper:
             )
             return False
 
-        target = pick.get("target")
-        if not target:
-            log.info("Chosen pager anchor has no __doPostBack target: %s", pick)
-            return False
-
-        log.info(
-            "Pagination: %s -> (%s) (target=%s)",
-            cur, pick.get("text"), target,
+        # We DO have a next page to go to. A failed/non-advancing postback here
+        # must NOT be silently treated as "last page" (that truncates the walk
+        # and silently drops later pages). Retry once with a short fixed backoff,
+        # and if it still won't advance, log a loud WARNING before giving up.
+        for attempt in range(1, 3):
+            target = pick.get("target")
+            if not target:
+                log.warning("Chosen pager anchor has no __doPostBack target: %s", pick)
+                return False
+            log.info("Pagination: %s -> (%s) (target=%s, attempt %d/2)",
+                     cur, pick.get("text"), target, attempt)
+            if self._postback_and_wait_pager(target):
+                new_info = self._read_pager()
+                new_cur = new_info["current"] if new_info else None
+                if new_cur is not None and new_cur > cur:
+                    if new_cur > cur + 1:
+                        log.info("Pagination jumped %s -> %s ('...' forward jump).",
+                                 cur, new_cur)
+                    return True
+                log.warning("Pagination did not advance (was %s, now %s); attempt %d/2.",
+                            cur, new_cur, attempt)
+            else:
+                log.warning("Pager postback failed; attempt %d/2.", attempt)
+            if attempt < 2:
+                time.sleep(3)  # fixed backoff, NOT human_delay (pacing unaffected)
+                info = self._read_pager()
+                if info is None:
+                    break
+                cur = info["current"]
+                pick = self._choose_next_pager_item(cur, info["items"])
+                if pick is None:
+                    return False  # re-read shows we're genuinely on the last page
+        log.warning(
+            "Pagination could not advance past page %s after retry — stopping "
+            "the list walk EARLY; requests on later pages may be missed this run.",
+            cur,
         )
-        if not self._postback_and_wait_pager(target):
-            return False
-
-        # Verify we actually advanced (active page strictly increased).
-        new_info = self._read_pager()
-        if new_info is None:
-            log.info("Pager missing after postback.")
-            return False
-        new_cur = new_info["current"]
-        if new_cur is None or new_cur <= cur:
-            log.info(
-                "Pagination click did not advance page (was %s, now %s).",
-                cur, new_cur,
-            )
-            return False
-        if new_cur > cur + 1:
-            log.info(
-                "Pagination jumped %s -> %s (skipping %d pages; '...' forward jump).",
-                cur, new_cur, new_cur - cur - 1,
-            )
-        return True
+        return False
 
     def _read_pager(self) -> dict | None:
         """Snapshot the pager: current page number and every anchor's position,
@@ -855,11 +878,7 @@ class PortalScraper:
         `RequestNotFoundError` for those so the caller can distinguish a bad
         rid from a transient failure.
         """
-        self.page.goto(detail_url, wait_until="domcontentloaded")
-        try:
-            self.page.wait_for_load_state("networkidle", timeout=15000)
-        except PlaywrightTimeout:
-            pass
+        self._goto_with_retry(detail_url)
 
         err = self._portal_error_message()
         if err is not None:
@@ -877,11 +896,7 @@ class PortalScraper:
         # Rebuild the URL against the NEW session path prefix. The original
         # detail_url had the old (S(sid)) prefix which is now invalid.
         retry_url = self._detail_url_for(rid)
-        self.page.goto(retry_url, wait_until="domcontentloaded")
-        try:
-            self.page.wait_for_load_state("networkidle", timeout=15000)
-        except PlaywrightTimeout:
-            pass
+        self._goto_with_retry(retry_url)
 
         err = self._portal_error_message()
         if err is not None:
@@ -896,6 +911,30 @@ class PortalScraper:
         """True if the current page URL looks like the portal's login screen."""
         url = (self.page.url or "").lower()
         return "login.aspx" in url
+
+    def _goto_with_retry(self, url: str, attempts: int = 2) -> None:
+        """Navigate (read-only GET) with a small bounded retry on transient
+        timeouts. Given the long human delays between records, a sub-minute
+        network blip is far likelier than the page being gone, so one cheap
+        retry avoids skipping a request for the whole run. Uses a short FIXED
+        sleep — NOT human_delay — so anti-bot pacing is unaffected."""
+        last_exc: Exception | None = None
+        for i in range(attempts):
+            try:
+                self.page.goto(url, wait_until="domcontentloaded")
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=15000)
+                except PlaywrightTimeout:
+                    pass
+                return
+            except PlaywrightTimeout as e:
+                last_exc = e
+                log.warning("Navigation to %s timed out (attempt %d/%d).",
+                            _scrub(url), i + 1, attempts)
+                if i + 1 < attempts:
+                    time.sleep(3)
+        if last_exc is not None:
+            raise last_exc
 
     def _portal_error_message(self) -> str | None:
         """If the current page is the portal's error redirect, return the
@@ -1024,9 +1063,14 @@ class PortalScraper:
                     sent_at = hdr.group(1)
                 sender = hdr.group(2).strip()
             else:
-                # Defensive: if header didn't parse, keep the raw text as sent_at/sender
-                sent_at = header
-                sender = header
+                # Header didn't match "On <date>, <sender> wrote:". Don't store
+                # the raw blob as the timestamp/sender — that corrupts sort order
+                # and sender classification (and could masquerade as support).
+                # Fail safe + warn. (sent_at is NOT NULL, so use "" not None.)
+                log.warning("Unparseable message header (msg %s): %r",
+                            msg_id, header[:200])
+                sent_at = ""
+                sender = "unparsed"
             subject = None
             sub_m = re.search(r"^Subject:\s*(.+)$", body, re.MULTILINE)
             if sub_m:
@@ -1108,7 +1152,11 @@ class PortalScraper:
         """
         into_dir.mkdir(parents=True, exist_ok=True)
         safe_name = _safe_filename(attachment.filename)
-        dest = into_dir / safe_name
+        # Prefix with the globally-unique attachment_id so two attachments that
+        # share a display name on the same request don't overwrite each other on
+        # disk (silent data loss in a records-compliance tool). Existing files
+        # are unaffected — their local_path is read verbatim from the DB.
+        dest = into_dir / f"{attachment.attachment_id}_{safe_name}"
 
         # Make sure we're on the right detail page (postback targets are render-scoped).
         if "RequestEdit.aspx" not in self.page.url or f"rid={rid}" not in self.page.url:
@@ -1159,12 +1207,18 @@ class PortalScraper:
         return dest
 
     def _maybe_confirm_download_popup(self) -> None:
-        """If a DevExpress confirmation popup appeared, click its Yes button."""
+        """If a DevExpress 'Download Confirmation' popup appears, click its Yes
+        button. Most files don't trigger it; the popup can also appear a beat
+        after the click, so we briefly wait for it. A no-popup download just
+        falls through silently (the wait times out and we move on)."""
+        primary = ("#DownloadConfirmationControl_DownloadAllPopupPanel_"
+                   "DownloadAllPopupFormLayout_DownloadAllPopupYes")
         try:
-            yes = self.page.locator(
-                "#DownloadConfirmationControl_DownloadAllPopupPanel_"
-                "DownloadAllPopupFormLayout_DownloadAllPopupYes"
-            ).first
+            try:
+                self.page.wait_for_selector(primary, state="visible", timeout=2000)
+            except PlaywrightTimeout:
+                pass  # no popup for this file — the common, normal case
+            yes = self.page.locator(primary).first
             if yes.count() > 0 and yes.is_visible():
                 yes.click(force=True, timeout=2000)
                 return
@@ -1175,8 +1229,8 @@ class PortalScraper:
             ).first
             if alt.count() > 0 and alt.is_visible():
                 alt.click(force=True, timeout=2000)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            log.debug("download confirmation handling skipped: %s", e)
 
 # -- helpers -------------------------------------------------------------------
 

@@ -15,7 +15,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .chapter119 import full_system_prompt, short_system_prefix
+from .chapter119 import CHAPTER_119_REFERENCE, short_system_prefix
+from .config import PROJECT_ROOT
 from .database import Database
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,10 @@ MODEL_CHAT = "claude-sonnet-4-6"
 MODEL_AUDIT = "claude-sonnet-4-6"
 MODEL_SUMMARIZE = "claude-sonnet-4-6"
 
+# Retries for transient API errors (529/rate-limit/network) on top of the SDK's
+# own handling, so a brief blip doesn't surface as a raw error to the user.
+API_MAX_RETRIES = 4
+
 # Truncation limits for packed context
 ATTACHMENT_SNIPPET_LIMIT = 8000
 ATTACHMENT_PACKED_LIMIT = 2500
@@ -33,6 +38,12 @@ ATTACHMENT_PACKED_LIMIT = 2500
 
 class AIConfigError(RuntimeError):
     """Raised when the AI layer isn't properly configured (missing key, etc.)."""
+
+
+class AIResponseError(RuntimeError):
+    """Raised when the model returned a response we couldn't use (e.g. the audit
+    JSON was malformed/truncated). Distinct from 'the record is compliant' so the
+    UI never reports a broken response as a clean bill of health."""
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +54,9 @@ def get_api_key() -> str | None:
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return key
-    cfg_path = Path("config.json")
+    # Resolve relative to the project root, NOT the current working directory,
+    # so the key is found no matter where the program was launched from.
+    cfg_path = PROJECT_ROOT / "config.json"
     if cfg_path.exists():
         try:
             raw = json.loads(cfg_path.read_text())
@@ -70,7 +83,7 @@ def get_client():
             "The 'anthropic' package is not installed. Run: "
             "python -m pip install -r requirements.txt"
         ) from e
-    return anthropic.Anthropic(api_key=key)
+    return anthropic.Anthropic(api_key=key, max_retries=API_MAX_RETRIES)
 
 
 def extract_text_response(resp) -> str:
@@ -79,6 +92,50 @@ def extract_text_response(resp) -> str:
         if getattr(block, "type", None) == "text":
             parts.append(block.text)
     return "".join(parts)
+
+
+def _log_usage(resp, label: str) -> None:
+    """Best-effort token-usage logging so the user can see what AI calls cost."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    log.info(
+        "AI usage [%s]: input=%s output=%s cache_read=%s cache_write=%s",
+        label,
+        getattr(u, "input_tokens", "?"),
+        getattr(u, "output_tokens", "?"),
+        getattr(u, "cache_read_input_tokens", 0),
+        getattr(u, "cache_creation_input_tokens", 0),
+    )
+
+
+def _system_blocks(task_description: str = "") -> list[dict]:
+    """System prompt as content blocks with the large Chapter 119 reference
+    marked cache_control=ephemeral. The reference is identical across audits and
+    chat turns, so prompt caching makes repeat calls cheaper and faster. The
+    small role+task header stays uncached because it varies per call."""
+    header = short_system_prefix()
+    if task_description:
+        header = header + "\n\n" + task_description.strip()
+    return [
+        {"type": "text", "text": header},
+        {"type": "text", "text": CHAPTER_119_REFERENCE,
+         "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def _merge_consecutive_roles(turns: list[dict]) -> list[dict]:
+    """Collapse adjacent same-role turns into one. The Anthropic Messages API
+    requires strictly alternating user/assistant roles; merging defensively
+    self-heals any conversation that was previously left with two consecutive
+    user turns (see continue_conversation)."""
+    merged: list[dict] = []
+    for t in turns:
+        if merged and merged[-1]["role"] == t["role"]:
+            merged[-1]["content"] = merged[-1]["content"] + "\n\n" + t["content"]
+        else:
+            merged.append({"role": t["role"], "content": t["content"]})
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -90,13 +147,11 @@ def build_request_context(db: Database, request_id: str,
                           max_chars: int = 60000) -> str:
     """Pack a single request + its messages + attachment text into a string
     suitable for the 'user' side of a prompt."""
-    reqs = [r for r in db.get_all_requests() if r["request_id"] == request_id]
-    if not reqs:
+    r = db.get_request(request_id)
+    if not r:
         return f"(No record found for request {request_id})"
-    r = reqs[0]
     messages = db.get_messages_for_request(request_id)
-    attachments = [a for a in db.get_all_attachments()
-                   if a["request_id"] == request_id]
+    attachments = db.get_attachments_for_request(request_id)
 
     lines = []
     lines.append(f"REQUEST: {r['request_id']}")
@@ -225,9 +280,13 @@ def continue_conversation(db: Database, conversation_id: int,
     if not conv:
         raise ValueError(f"conversation {conversation_id} not found")
 
-    db.add_conversation_message(conversation_id, "user", user_message)
-
+    # NOTE: we do NOT persist the user turn yet. Saving it before the API call
+    # means a transient API failure leaves a dangling user message with no
+    # assistant reply; the next send then produces two consecutive user turns,
+    # which the Messages API rejects (roles must alternate) — wedging the thread
+    # permanently. Instead we save BOTH turns together only after success.
     history = db.get_conversation_messages(conversation_id)
+
     # Build context block
     if conv["scope"] == "request" and conv.get("request_id"):
         context_block = build_request_context(db, conv["request_id"])
@@ -239,13 +298,19 @@ def continue_conversation(db: Database, conversation_id: int,
             + context_block
         )
 
-    # The first user turn in the API conversation carries the context block;
-    # subsequent turns carry only the user message so we don't blow the budget.
+    # Existing history (excluding system rows) + the new user message, held in
+    # memory; collapse any consecutive same-role turns so an already-wedged
+    # thread self-heals.
+    turns = [{"role": m["role"], "content": m["content"]}
+             for m in history if m["role"] != "system"]
+    turns.append({"role": "user", "content": user_message})
+    turns = _merge_consecutive_roles(turns)
+
+    # The first user turn carries the context block; later turns carry only the
+    # user message so we don't blow the token budget.
     api_messages = []
     first_user_turn = True
-    for m in history:
-        if m["role"] == "system":
-            continue
+    for m in turns:
         content = m["content"]
         if m["role"] == "user" and first_user_turn:
             content = context_header + "\n\n---\n\nUSER:\n" + content
@@ -255,11 +320,17 @@ def continue_conversation(db: Database, conversation_id: int,
     resp = client.messages.create(
         model=model,
         max_tokens=2500,
-        system=full_system_prompt(_CHAT_TASK),
+        system=_system_blocks(_CHAT_TASK),
         messages=api_messages,
     )
+    _log_usage(resp, "chat")
     reply = extract_text_response(resp).strip() or "(no response)"
-    db.add_conversation_message(conversation_id, "assistant", reply, model=model)
+
+    # Persist both turns atomically, only now that the call succeeded.
+    with db.transaction():
+        db.add_conversation_message(conversation_id, "user", user_message, commit=False)
+        db.add_conversation_message(conversation_id, "assistant", reply,
+                                    model=model, commit=False)
     return reply
 
 
@@ -314,54 +385,65 @@ def audit_request_compliance(db: Database, request_id: str,
 
     resp = client.messages.create(
         model=model,
-        max_tokens=3000,
-        system=full_system_prompt(_AUDIT_TASK),
+        max_tokens=4000,
+        system=_system_blocks(_AUDIT_TASK),
         messages=[{"role": "user", "content": context}],
     )
+    _log_usage(resp, "audit")
     raw = extract_text_response(resp)
-    parsed = _parse_json_lenient(raw) or {"issues": [], "overall_assessment": raw[:2000]}
+    parsed = _parse_json_lenient(raw)
+    if parsed is None:
+        # Do NOT fall back to an empty issues list — that would render an
+        # unreadable/truncated response as a reassuring "0 issues / compliant".
+        log.warning(
+            "Audit for %s returned unparseable JSON (%d chars). Head: %s",
+            request_id, len(raw or ""), (raw or "")[:500],
+        )
+        raise AIResponseError(
+            "The audit ran but the AI's response could not be read. "
+            "This is usually transient — please try again."
+        )
 
-    # Persist issues (open by default). Also record the audit as a saved
-    # conversation turn so the user can see what the AI said.
     issues = parsed.get("issues") or []
     saved_ids: list[int] = []
-    for it in issues:
-        try:
-            iid = db.add_compliance_issue({
-                "request_id": request_id,
-                "statute_section": it.get("statute_section"),
-                "issue_type": (it.get("issue_type") or "unspecified")[:80],
-                "severity": (it.get("severity") or "medium"),
-                "description": it.get("description") or "",
-                "evidence": it.get("evidence"),
-                "ai_confidence": float(it.get("confidence")) if it.get("confidence") is not None else None,
-                "identified_by": "ai",
-                "model": model,
-                "status": "open",
-            })
-            saved_ids.append(iid)
-        except Exception:
-            log.exception("failed to save compliance issue for %s", request_id)
-
-    # Also record the audit transcript in a conversation so it's reviewable.
     conv_title = f"Compliance audit — {request_id}"
     existing = [
         c for c in db.list_conversations(scope="request", request_id=request_id)
         if c["title"] == conv_title
     ]
-    if existing:
-        conv_id = existing[0]["conversation_id"]
-    else:
-        conv_id = db.create_conversation("request", conv_title, request_id=request_id)
-    db.add_conversation_message(
-        conv_id, "user",
-        "Please audit this request for Chapter 119 compliance.",
-    )
-    db.add_conversation_message(
-        conv_id, "assistant",
-        json.dumps(parsed, indent=2, default=str),
-        model=model,
-    )
+    # Persist everything in ONE transaction: replace prior AI findings for this
+    # request (so re-running doesn't duplicate), insert the fresh batch, and
+    # record the transcript. User-logged and already-triaged issues are kept.
+    with db.transaction():
+        db.clear_open_ai_issues(request_id, commit=False)
+        for it in issues:
+            try:
+                iid = db.add_compliance_issue({
+                    "request_id": request_id,
+                    "statute_section": it.get("statute_section"),
+                    "issue_type": (it.get("issue_type") or "unspecified")[:80],
+                    "severity": (it.get("severity") or "medium"),
+                    "description": it.get("description") or "",
+                    "evidence": it.get("evidence"),
+                    "ai_confidence": float(it.get("confidence")) if it.get("confidence") is not None else None,
+                    "identified_by": "ai",
+                    "model": model,
+                    "status": "open",
+                }, commit=False)
+                saved_ids.append(iid)
+            except Exception:
+                log.exception("failed to save compliance issue for %s", request_id)
+        if existing:
+            conv_id = existing[0]["conversation_id"]
+        else:
+            conv_id = db.create_conversation(
+                "request", conv_title, request_id=request_id, commit=False)
+        db.add_conversation_message(
+            conv_id, "user",
+            "Please audit this request for Chapter 119 compliance.", commit=False)
+        db.add_conversation_message(
+            conv_id, "assistant",
+            json.dumps(parsed, indent=2, default=str), model=model, commit=False)
 
     parsed["_saved_issue_ids"] = saved_ids
     parsed["_conversation_id"] = conv_id

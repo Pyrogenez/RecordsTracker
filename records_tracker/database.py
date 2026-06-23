@@ -1,11 +1,31 @@
 """SQLite storage layer for scraped request data."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
+
+log = logging.getLogger(__name__)
+
+# A 'failed' attachment is retried on subsequent runs until it has been
+# attempted this many times, after which it is considered permanently failed
+# and stops generating retry noise every run.
+DEFAULT_MAX_DOWNLOAD_ATTEMPTS = 5
+
+
+def is_support_sender(sender: str | None) -> bool:
+    """True if a message sender is the city's records-support account.
+
+    Centralizes a check that used to be duplicated (and inconsistent) across
+    database.py, analyze.py and a template. Conservative on purpose — exact
+    match or an 'stpetefl support' prefix — so a requester whose own display
+    name merely contains the word "support" is never misbucketed as the agency.
+    """
+    s = (sender or "").strip().lower()
+    return s == "stpetefl support" or s.startswith("stpetefl support")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -52,6 +72,7 @@ CREATE TABLE IF NOT EXISTS attachments (
     file_size         INTEGER,
     downloaded_at     TEXT,
     error_message     TEXT,
+    download_attempts INTEGER NOT NULL DEFAULT 0,
     first_seen_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_request ON attachments(request_id);
@@ -148,12 +169,14 @@ CREATE INDEX IF NOT EXISTS idx_compliance_request ON compliance_issues(request_i
 CREATE INDEX IF NOT EXISTS idx_compliance_status ON compliance_issues(status);
 """
 
-# Applied to already-existing DBs at open time. Each statement is wrapped in
-# a try/except so we can re-run safely.
+# Applied to already-existing DBs at open time. Each is an idempotent additive
+# ALTER; "duplicate column name" on re-run is expected and ignored, anything
+# else is logged. Never destructive — existing populated DBs must keep working.
 _MIGRATIONS: list[str] = [
     "ALTER TABLE overrides ADD COLUMN is_closed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE runs ADD COLUMN mode TEXT",
     "ALTER TABLE runs ADD COLUMN requests_skipped INTEGER DEFAULT 0",
+    "ALTER TABLE attachments ADD COLUMN download_attempts INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -164,19 +187,40 @@ def now_utc() -> str:
 class Database:
     """Thin wrapper around sqlite3 with the operations we actually use."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, ensure_schema: bool = True):
         self.db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        self._conn = sqlite3.connect(str(db_path), timeout=30)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets the web UI keep reading while a scrape writes (and vice
+        # versa) instead of raising "database is locked"; busy_timeout makes any
+        # unavoidable wait-on-lock explicit rather than failing instantly. Both
+        # are persisted/idempotent and safe on an existing populated DB. (May
+        # be unavailable on some network filesystems — degrade gracefully.)
+        try:
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA busy_timeout = 5000")
+        except sqlite3.OperationalError as exc:
+            log.warning("Could not enable WAL/busy_timeout: %s", exc)
+        # ensure_schema=False lets the web UI open a per-request connection
+        # without re-running the full schema script + migrations every page load
+        # (create_app runs it once at startup instead).
+        if ensure_schema:
+            self.ensure_schema()
+
+    def ensure_schema(self) -> None:
+        """Create tables and apply idempotent migrations. Cheap to re-run."""
         self._conn.executescript(SCHEMA)
         for stmt in _MIGRATIONS:
             try:
                 self._conn.execute(stmt)
-            except sqlite3.OperationalError:
-                # Column already exists, etc. Safe to ignore.
-                pass
+            except sqlite3.OperationalError as exc:
+                # "duplicate column name" is the expected idempotent re-run.
+                # Anything else (typo, missing table, disk error) is a real
+                # problem and should not be swallowed silently.
+                if "duplicate column name" not in str(exc).lower():
+                    log.warning("Migration step failed (%s): %s", stmt, exc)
         self._conn.commit()
 
     def close(self) -> None:
@@ -192,34 +236,82 @@ class Database:
             raise
 
     # ------- requests -------
+    # Columns supplied by the scraper. The derived analytics columns
+    # (submission_time, first_*_time, hours_to_first_reply, last_modified_at)
+    # are deliberately NOT here — they are owned by recompute_first_reply().
+    SCRAPED_COLS = [
+        "rid", "status", "final_state", "request_type", "category",
+        "department", "records_type", "description", "preferred_method",
+        "requester_email", "detail_url",
+    ]
+
     def upsert_request(self, data: dict) -> bool:
-        """Insert or update a request. Returns True if this is a new request."""
-        existing = self._conn.execute(
-            "SELECT request_id FROM requests WHERE request_id = ?",
-            (data["request_id"],),
-        ).fetchone()
-        is_new = existing is None
+        """Insert or update a request. Returns True if this is a new request.
+
+        On update we touch only scraped columns + last_scraped_at, preserving
+        first_seen_at and the derived analytics columns. The previous
+        INSERT OR REPLACE nulled every derived column on every scrape and relied
+        on the immediately-following recompute_first_reply to repair them — a
+        brittle implicit contract this avoids.
+        """
+        request_id = data["request_id"]
         now = now_utc()
-        if is_new:
-            data.setdefault("first_seen_at", now)
-        data["last_scraped_at"] = now
-        cols = [
-            "request_id", "rid", "status", "final_state", "request_type",
-            "category", "department", "records_type", "description",
-            "preferred_method", "requester_email", "first_seen_at",
-            "last_scraped_at", "last_modified_at", "submission_time",
-            "first_auto_ack_time", "first_real_reply_time",
-            "hours_to_first_reply", "detail_url",
-        ]
-        placeholders = ",".join(f":{c}" for c in cols)
-        merged = {c: data.get(c) for c in cols}
-        if not is_new:
-            merged["first_seen_at"] = existing_first_seen(self._conn, data["request_id"])
+        existing = self._conn.execute(
+            "SELECT request_id FROM requests WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        if existing is not None:
+            sets = ", ".join(f"{c} = :{c}" for c in self.SCRAPED_COLS)
+            params = {c: data.get(c) for c in self.SCRAPED_COLS}
+            params["request_id"] = request_id
+            params["last_scraped_at"] = now
+            self._conn.execute(
+                f"UPDATE requests SET {sets}, last_scraped_at = :last_scraped_at "
+                "WHERE request_id = :request_id",
+                params,
+            )
+            return False
+
+        # New request_id. Guard against a `rid` UNIQUE collision caused by a
+        # prior rid-only --ids-file placeholder ("P<rid>") being upgraded to its
+        # canonical key ("P<rid>-MMDDYY"). Self-heal a childless placeholder;
+        # otherwise keep the existing row and skip rather than aborting the run.
+        rid = data.get("rid")
+        clash = self._conn.execute(
+            "SELECT request_id FROM requests WHERE rid = ? AND request_id != ?",
+            (rid, request_id),
+        ).fetchone()
+        if clash is not None:
+            old_id = clash["request_id"]
+            if self._request_has_children(old_id):
+                log.warning(
+                    "Request %s shares rid=%s with existing %s which already has "
+                    "messages/attachments; keeping the existing row and skipping "
+                    "the new key.", request_id, rid, old_id,
+                )
+                return False
+            self._conn.execute("DELETE FROM overrides WHERE request_id = ?", (old_id,))
+            self._conn.execute("DELETE FROM requests WHERE request_id = ?", (old_id,))
+            log.info("Reconciled placeholder %s -> %s (rid=%s)", old_id, request_id, rid)
+
+        insert_cols = ["request_id", "first_seen_at", "last_scraped_at"] + self.SCRAPED_COLS
+        params = {c: data.get(c) for c in self.SCRAPED_COLS}
+        params["request_id"] = request_id
+        params["first_seen_at"] = data.get("first_seen_at") or now
+        params["last_scraped_at"] = now
+        placeholders = ",".join(f":{c}" for c in insert_cols)
         self._conn.execute(
-            f"INSERT OR REPLACE INTO requests ({','.join(cols)}) VALUES ({placeholders})",
-            merged,
+            f"INSERT INTO requests ({','.join(insert_cols)}) VALUES ({placeholders})",
+            params,
         )
-        return is_new
+        return True
+
+    def _request_has_children(self, request_id: str) -> bool:
+        for tbl in ("messages", "attachments"):
+            if self._conn.execute(
+                f"SELECT 1 FROM {tbl} WHERE request_id = ? LIMIT 1", (request_id,)
+            ).fetchone():
+                return True
+        return False
 
     def upsert_message(self, data: dict) -> bool:
         """Insert a message; skip if already present. Returns True if new."""
@@ -272,28 +364,72 @@ class Database:
             "file_size=?, downloaded_at=?, error_message=NULL WHERE attachment_id=?",
             (local_path, file_size, now_utc(), attachment_id),
         )
+        self._conn.commit()
 
     def mark_attachment_failed(self, attachment_id: int, error_message: str) -> None:
         self._conn.execute(
             "UPDATE attachments SET download_status='failed', error_message=?, "
-            "downloaded_at=? WHERE attachment_id=?",
+            "downloaded_at=?, download_attempts = download_attempts + 1 "
+            "WHERE attachment_id=?",
             (error_message, now_utc(), attachment_id),
         )
+        self._conn.commit()
 
-    def get_pending_attachments(self, request_id: str | None = None) -> list[dict]:
-        q = ("SELECT * FROM attachments WHERE download_status IN ('pending','failed')")
+    def get_pending_attachments(
+        self, request_id: str | None = None,
+        max_attempts: int = DEFAULT_MAX_DOWNLOAD_ATTEMPTS,
+    ) -> list[dict]:
+        """Attachments still worth attempting: all 'pending', plus 'failed' ones
+        that haven't yet exhausted max_attempts. A permanently-failed attachment
+        stops being retried every run (and is surfaced in counts())."""
+        q = (
+            "SELECT * FROM attachments WHERE download_status='pending' "
+            "OR (download_status='failed' AND download_attempts < ?)"
+        )
+        params: list = [max_attempts]
+        if request_id:
+            q += " AND request_id = ?"
+            params.append(request_id)
+        rows = self._conn.execute(q, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def reset_failed_downloads(self, request_id: str | None = None) -> int:
+        """Escape hatch: clear the attempt counter on failed attachments so the
+        next run retries them. Returns how many were reset."""
+        q = "UPDATE attachments SET download_attempts = 0 WHERE download_status='failed'"
         params: tuple = ()
         if request_id:
             q += " AND request_id = ?"
             params = (request_id,)
-        rows = self._conn.execute(q, params).fetchall()
-        return [dict(r) for r in rows]
+        cur = self._conn.execute(q, params)
+        self._conn.commit()
+        return cur.rowcount
 
     def get_all_requests(self) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM requests ORDER BY rid DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_request(self, request_id: str) -> dict | None:
+        """Fetch a single request row (avoids scanning all requests to find one)."""
+        row = self._conn.execute(
+            "SELECT * FROM requests WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_attachments_for_request(self, request_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM attachments WHERE request_id = ? ORDER BY attachment_id",
+            (request_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_attachment(self, attachment_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM attachments WHERE attachment_id = ?", (attachment_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_messages_for_request(self, request_id: str) -> list[dict]:
         rows = self._conn.execute(
@@ -333,19 +469,30 @@ class Database:
             (request_id, first_real_reply_message_id, 1 if is_closed else 0,
              notes, now_utc()),
         )
+        self._conn.commit()
 
-    def is_request_closed(self, request_id: str, portal_final_state: str | None) -> bool:
-        """A request is considered closed if either (a) the portal reports
-        'Completed' / 'Closed' / 'Denied' as its final_state, OR (b) the user
-        has marked it closed in the overrides table."""
-        ov = self.get_override(request_id)
-        if ov and ov.get("is_closed"):
-            return True
+    @staticmethod
+    def _final_state_is_closed(portal_final_state: str | None) -> bool:
         if portal_final_state:
-            s = portal_final_state.strip().lower()
-            if s in {"completed", "closed", "fulfilled", "denied"}:
-                return True
+            return portal_final_state.strip().lower() in {
+                "completed", "closed", "fulfilled", "denied",
+            }
         return False
+
+    def is_request_closed(self, request_id: str, portal_final_state: str | None,
+                          *, override_closed: bool | None = None) -> bool:
+        """A request is considered closed if either (a) the portal reports
+        'Completed' / 'Closed' / 'Fulfilled' / 'Denied' as its final_state, OR
+        (b) the user has marked it closed in the overrides table.
+
+        Pass override_closed when the caller already has the override flag (e.g.
+        from a JOIN) to avoid an extra per-row query."""
+        if override_closed is None:
+            ov = self.get_override(request_id)
+            override_closed = bool(ov and ov.get("is_closed"))
+        if override_closed:
+            return True
+        return self._final_state_is_closed(portal_final_state)
 
     def request_exists(self, request_id: str) -> bool:
         row = self._conn.execute(
@@ -356,12 +503,13 @@ class Database:
     def get_open_request_ids(self) -> set[str]:
         """Set of request IDs that are NOT closed (portal or override)."""
         rows = self._conn.execute(
-            "SELECT r.request_id, r.final_state, o.is_closed "
+            "SELECT r.request_id, r.final_state, o.is_closed AS override_closed "
             "FROM requests r LEFT JOIN overrides o USING (request_id)"
         ).fetchall()
         out: set[str] = set()
         for r in rows:
-            if self.is_request_closed(r["request_id"], r["final_state"]):
+            if self.is_request_closed(r["request_id"], r["final_state"],
+                                      override_closed=bool(r["override_closed"])):
                 continue
             out.add(r["request_id"])
         return out
@@ -378,7 +526,8 @@ class Database:
         out: list[dict] = []
         for r in rows:
             d = dict(r)
-            if self.is_request_closed(d["request_id"], d.get("final_state")):
+            if self.is_request_closed(d["request_id"], d.get("final_state"),
+                                      override_closed=bool(d.get("override_closed"))):
                 continue
             out.append(d)
         return out
@@ -392,6 +541,7 @@ class Database:
             "INSERT INTO runs (started_at, mode) VALUES (?, ?)",
             (now_utc(), mode),
         )
+        self._conn.commit()
         return cur.lastrowid
 
     def finish_run(self, run_id: int, *, requests_scraped: int,
@@ -404,12 +554,19 @@ class Database:
             (now_utc(), requests_scraped, requests_skipped, new_requests,
              new_messages, new_attachments, error, run_id),
         )
+        self._conn.commit()
 
     def get_last_run(self) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM runs ORDER BY run_id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
+
+    def get_recent_runs(self, limit: int = 25) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM runs ORDER BY run_id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def has_baseline_run(self) -> bool:
         row = self._conn.execute(
@@ -508,7 +665,8 @@ class Database:
 
     # ---- conversations ----
     def create_conversation(self, scope: str, title: str,
-                            request_id: str | None = None) -> int:
+                            request_id: str | None = None,
+                            *, commit: bool = True) -> int:
         if scope not in ("request", "global"):
             raise ValueError(f"invalid scope: {scope}")
         if scope == "request" and not request_id:
@@ -519,7 +677,8 @@ class Database:
             "VALUES (?, ?, ?, ?, ?)",
             (scope, request_id, title, now, now),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return cur.lastrowid
 
     def rename_conversation(self, conversation_id: int, title: str) -> None:
@@ -562,7 +721,8 @@ class Database:
         return [dict(r) for r in rows]
 
     def add_conversation_message(self, conversation_id: int, role: str,
-                                 content: str, model: str | None = None) -> int:
+                                 content: str, model: str | None = None,
+                                 *, commit: bool = True) -> int:
         if role not in ("user", "assistant", "system"):
             raise ValueError(f"invalid role: {role}")
         now = now_utc()
@@ -575,7 +735,8 @@ class Database:
             "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
             (now, conversation_id),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return cur.lastrowid
 
     def get_conversation_messages(self, conversation_id: int) -> list[dict]:
@@ -587,7 +748,7 @@ class Database:
         return [dict(r) for r in rows]
 
     # ---- compliance issues ----
-    def add_compliance_issue(self, data: dict) -> int:
+    def add_compliance_issue(self, data: dict, *, commit: bool = True) -> int:
         now = now_utc()
         data.setdefault("created_at", now)
         data.setdefault("updated_at", now)
@@ -604,8 +765,22 @@ class Database:
             f"INSERT INTO compliance_issues ({','.join(cols)}) VALUES ({placeholders})",
             merged,
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return cur.lastrowid
+
+    def clear_open_ai_issues(self, request_id: str, *, commit: bool = True) -> int:
+        """Delete still-open, AI-identified issues for a request so a fresh audit
+        replaces them instead of duplicating. User-logged issues and any the user
+        has already resolved/dismissed (or edited) are left untouched."""
+        cur = self._conn.execute(
+            "DELETE FROM compliance_issues WHERE request_id = ? "
+            "AND identified_by = 'ai' AND status = 'open'",
+            (request_id,),
+        )
+        if commit:
+            self._conn.commit()
+        return cur.rowcount
 
     def update_compliance_issue(self, issue_id: int, **fields) -> None:
         if not fields:
@@ -661,6 +836,10 @@ class Database:
                 "SELECT COUNT(*) FROM attachments WHERE download_status IN "
                 "('pending','failed')"
             ),
+            "failed_attachments": one(
+                "SELECT COUNT(*) FROM attachments WHERE download_status='failed' "
+                f"AND download_attempts >= {DEFAULT_MAX_DOWNLOAD_ATTEMPTS}"
+            ),
             "open_requests": len(self.get_open_request_ids()),
             "user_closed_requests": one(
                 "SELECT COUNT(*) FROM overrides WHERE is_closed = 1"
@@ -695,12 +874,12 @@ class Database:
         # Heuristic: first message = submission; first STPETEFL message = auto-ack;
         # next STPETEFL message = first real reply (unless overridden).
         first_msg = messages[0]
-        submission_time = first_msg["sent_at"] if first_msg["sender"] != "STPETEFL Support" else None
+        submission_time = None if is_support_sender(first_msg["sender"]) else first_msg["sent_at"]
         if submission_time is None:
             # Requester might not appear; fall back to earliest message timestamp
             submission_time = first_msg["sent_at"]
 
-        support_msgs = [m for m in messages if m["sender"] == "STPETEFL Support"]
+        support_msgs = [m for m in messages if is_support_sender(m["sender"])]
         first_auto_ack = support_msgs[0]["sent_at"] if support_msgs else None
 
         first_real_reply = None
@@ -739,10 +918,3 @@ class Database:
             (submission_time, first_auto_ack, first_real_reply, hours,
              last_modified, request_id),
         )
-
-
-def existing_first_seen(conn: sqlite3.Connection, request_id: str) -> str:
-    row = conn.execute(
-        "SELECT first_seen_at FROM requests WHERE request_id = ?", (request_id,)
-    ).fetchone()
-    return row["first_seen_at"] if row else now_utc()

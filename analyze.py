@@ -30,12 +30,12 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from records_tracker.config import load_config, project_paths
-from records_tracker.database import Database
+from records_tracker.config import PROJECT_ROOT, load_config, project_paths
+from records_tracker.database import Database, is_support_sender
 from records_tracker.excel_export import write_workbook
 
 log = logging.getLogger("analyze")
@@ -73,7 +73,8 @@ def _get_api_key() -> str | None:
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return key
-    cfg_path = Path("config.json")
+    # Resolve against the project root, not the current working directory.
+    cfg_path = PROJECT_ROOT / "config.json"
     if cfg_path.exists():
         try:
             raw = json.loads(cfg_path.read_text())
@@ -107,7 +108,7 @@ def _require_anthropic_client():
             file=sys.stderr,
         )
         sys.exit(2)
-    return anthropic.Anthropic(api_key=key)
+    return anthropic.Anthropic(api_key=key, max_retries=4)
 
 
 # =============================================================================
@@ -273,7 +274,7 @@ def command_classify(db: Database, limit: int | None = None,
                      only_support: bool = True) -> int:
     pending = db.messages_needing_classification()
     if only_support:
-        pending = [m for m in pending if m["sender"] == "STPETEFL Support"]
+        pending = [m for m in pending if is_support_sender(m["sender"])]
     if limit:
         pending = pending[:limit]
     if not pending:
@@ -325,13 +326,11 @@ _SUMMARIZE_SYSTEM = (
 
 
 def _pack_request_context(db: Database, request_id: str) -> str:
-    reqs = [r for r in db.get_all_requests() if r["request_id"] == request_id]
-    if not reqs:
+    r = db.get_request(request_id)
+    if not r:
         return ""
-    r = reqs[0]
     messages = db.get_messages_for_request(request_id)
-    attachments = [a for a in db.get_all_attachments()
-                   if a["request_id"] == request_id]
+    attachments = db.get_attachments_for_request(request_id)
 
     parts: list[str] = []
     parts.append(f"Request ID: {r['request_id']}")
@@ -359,6 +358,33 @@ def _pack_request_context(db: Database, request_id: str) -> str:
     return "\n".join(parts)
 
 
+def _request_changed_since_summary(last_modified: str | None,
+                                   summary_updated: str | None) -> bool:
+    """True if a request looks newer than its existing summary.
+
+    last_modified is a naive portal-local (Eastern) message time; summary
+    updated_at is UTC. A raw string comparison (the previous logic) is wrong
+    because of that offset and the '+00:00' suffix, and could silently leave a
+    stale summary. We parse both, normalize to naive UTC, and add a slack window
+    to the naive Eastern value so we err toward refreshing rather than skipping.
+    """
+    if not last_modified or not summary_updated:
+        return True
+    try:
+        from dateutil import parser as _p
+        lm = _p.parse(last_modified)
+        su = _p.parse(summary_updated)
+        lm_naive = lm.tzinfo is None
+        if not lm_naive:
+            lm = lm.astimezone(timezone.utc).replace(tzinfo=None)
+        if su.tzinfo is not None:
+            su = su.astimezone(timezone.utc).replace(tzinfo=None)
+        slack = timedelta(hours=6) if lm_naive else timedelta(0)
+        return (lm + slack) > su
+    except Exception:
+        return True
+
+
 def command_summarize(db: Database, force: bool = False,
                       limit: int | None = None,
                       only_request: str | None = None) -> int:
@@ -369,9 +395,8 @@ def command_summarize(db: Database, force: bool = False,
     for r in all_requests:
         existing = db.get_request_summary(r["request_id"])
         if existing and not force:
-            # Skip if already summarized and last-modified didn't move forward
-            lm = r.get("last_modified_at")
-            if lm and existing.get("updated_at") and lm <= existing["updated_at"]:
+            if not _request_changed_since_summary(
+                    r.get("last_modified_at"), existing.get("updated_at")):
                 continue
         todo.append(r)
     if limit:
@@ -487,7 +512,31 @@ def command_stats(db: Database) -> int:
     return 0
 
 
-def command_all(db: Database, excel_path: Path, limit: int | None = None) -> int:
+def command_all(db: Database, excel_path: Path, limit: int | None = None,
+                assume_yes: bool = False) -> int:
+    to_extract = len(db.attachments_needing_text())
+    to_classify = len([m for m in db.messages_needing_classification()
+                       if is_support_sender(m["sender"])])
+    n_requests = len(db.get_all_requests())
+    print("Pending AI work:")
+    print(f"  attachments to extract text from: {to_extract}  (local, free)")
+    print(f"  messages to classify (Claude):    {to_classify}")
+    print(f"  requests to (re)summarize (Claude): up to {n_requests}")
+    # classify + summarize call the paid API; guard against accidental spend,
+    # especially when invoked non-interactively (e.g. from the web UI).
+    if not assume_yes and limit is None:
+        if sys.stdin.isatty():
+            resp = input(
+                "This calls the Anthropic API and may cost money. Proceed? [y/N] "
+            ).strip().lower()
+            if resp not in ("y", "yes"):
+                print("Aborted.")
+                return 0
+        else:
+            print("Refusing to run non-interactively without --yes (would call "
+                  "the paid API).\nRe-run with:  python analyze.py all --yes  "
+                  "(optionally --limit N)", file=sys.stderr)
+            return 1
     command_extract(db, limit=limit)
     command_classify(db, limit=limit)
     command_summarize(db, limit=limit)
@@ -525,6 +574,9 @@ def parse_args() -> argparse.Namespace:
 
     al = sub.add_parser("all", help="Run extract -> classify -> summarize")
     al.add_argument("--limit", type=int, help="Limit each stage to N items")
+    al.add_argument("--yes", action="store_true",
+                    help="Skip the confirmation prompt (required when run "
+                         "non-interactively, e.g. from the web UI)")
 
     ask = sub.add_parser("ask", help="Ask a natural-language question")
     ask.add_argument("question", help="The question to ask")
@@ -561,7 +613,8 @@ def main() -> int:
                 only_request=args.request,
             )
         if args.command == "all":
-            return command_all(db, paths["excel"], limit=args.limit)
+            return command_all(db, paths["excel"], limit=args.limit,
+                               assume_yes=args.yes)
         if args.command == "ask":
             return command_ask(db, args.question, only_request=args.request)
         if args.command == "stats":
