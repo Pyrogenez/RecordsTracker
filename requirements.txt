@@ -1,9 +1,10 @@
 playwright==1.47.0
-openpyxl==3.1.5
-python-dateutil==2.9.0.post0
-# AI analysis layer (analyze.py + ai.py)
-anthropic>=0.39.0
-pypdf>=4.3.0
-python-docx>=1.1.2
+openpyxl>=3.1.5,<4.0.0
+python-dateutil>=2.9.0,<3.0.0
+# AI analysis layer (analyze.py + ai.py). anthropic is 0.x and can break across
+# minor versions, so cap it just above the tested release (0.111.x).
+anthropic>=0.69.0,<0.120.0
+pypdf>=4.3.0,<7.0.0
+python-docx>=1.1.2,<2.0.0
 # Local web UI (server.py)
-flask>=3.0.0
+flask>=3.0.0,<4.0.0

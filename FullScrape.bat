@@ -8,6 +8,15 @@ if not exist "venv\Scripts\activate.bat" (
     exit /b 1
 )
 
+if not exist "credentials.json" (
+    echo.
+    echo   Your portal login has not been configured yet.
+    echo   Please run "Install.bat" to finish setup.
+    echo.
+    pause
+    exit /b 1
+)
+
 call "venv\Scripts\activate.bat"
 
 echo.

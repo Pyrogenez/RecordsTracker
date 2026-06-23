@@ -1,2 +1,3 @@
 """St. Petersburg FL Public Records Center tracker (read-only)."""
-__version__ = "0.1.0"
+# Keep in sync with VERSION.txt (release checklist bumps both).
+__version__ = "1.2.0"

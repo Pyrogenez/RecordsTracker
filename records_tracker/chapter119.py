@@ -12,6 +12,11 @@ the Florida Attorney General), and published appellate decisions.
 from __future__ import annotations
 
 
+# Hand-maintained: the vintage of the statutory text and case law below. Bump
+# this when the reference is reviewed/updated (it is decoupled from app version).
+REFERENCE_AS_OF = "2024 (Fla. Stat. Ch. 119 + Government-in-the-Sunshine Manual)"
+
+
 CHAPTER_119_REFERENCE = """\
 # FLORIDA PUBLIC RECORDS LAW — REFERENCE FOR AI ANALYSIS
 
@@ -251,7 +256,10 @@ def short_system_prefix() -> str:
         "You assist the requester, a resident of St. Petersburg, FL, in tracking "
         "his public records requests to the City of St. Petersburg. You have "
         "working knowledge of Florida Public Records Law (Chapter 119 of the "
-        "Florida Statutes) and relevant Florida case law."
+        "Florida Statutes) and relevant Florida case law. Your statutory and "
+        f"case-law reference is current as of {REFERENCE_AS_OF}; flag when an "
+        "answer may turn on more recent amendments or decisions, and remember "
+        "this is research assistance, not legal advice."
     )
 
 

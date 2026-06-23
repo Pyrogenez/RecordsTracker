@@ -42,6 +42,23 @@ if errorlevel 1 (
 for /f "tokens=* usebackq" %%v in (`python --version`) do set PYVER=%%v
 echo   Found %PYVER%
 
+REM This program uses 3.10+ syntax (and is tested on 3.11+). A too-old Python
+REM (or the Microsoft Store stub) would otherwise fail later with a confusing
+REM traceback far from the real cause, so check the version up front.
+python -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo   Your Python is too old. This program needs Python 3.11 or newer.
+    echo     1. Go to https://www.python.org/downloads/
+    echo     2. Install Python 3.11 or newer.
+    echo     3. IMPORTANT: check "Add python.exe to PATH" on the first screen.
+    echo     4. Come back and run Install.bat again.
+    echo.
+    start https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
+
 REM --- Step 2: venv ---
 echo.
 echo [2/5] Creating private workspace (virtual environment)...
