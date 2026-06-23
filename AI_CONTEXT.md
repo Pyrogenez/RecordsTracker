@@ -25,7 +25,16 @@ The program has four layers:
    browser automation that logs into the portal, walks the request list,
    opens each request, and captures metadata, messages, and attachments.
 2. **Local web UI** (`server.py` + `templates/` + `static/`) — a Flask app
-   on `http://127.0.0.1:5000`. The day-to-day interface.
+   on `http://127.0.0.1:5000`. The day-to-day interface. Pages: a **Dashboard**
+   (reply-time analytics, overdue requests, volume by month), the **Requests**
+   list (searchable / sortable / status-filterable), a per-request **detail**
+   page (metadata, messages, downloadable attachments + extracted text, AI
+   summary, override controls, compliance issues, AI chat), a **Compliance**
+   dashboard (+ a printable report), **AI Analysis** (cross-record chat), and a
+   **Runs & Sync** page that can trigger an incremental/full scrape or "run AI
+   analysis on all" as background jobs (single-job concurrency guard) and shows
+   run history + analysis coverage. Light/dark themes. AI output is rendered as
+   Markdown. State-changing routes are same-origin guarded.
 3. **AI analysis layer** (`analyze.py` + `records_tracker/ai.py` +
    `records_tracker/chapter119.py`) — uses the Anthropic API to classify
    messages, summarize records, run Florida Chapter 119 compliance audits,
@@ -62,8 +71,14 @@ python analyze.py extract           text-extract downloaded attachments
 python analyze.py classify          classify messages (auto_ack/substantive/etc)
 python analyze.py summarize         per-request AI summaries
 python analyze.py ask "..."         ask Claude a question about the corpus
+python analyze.py all --yes         extract -> classify -> summarize (the
+                                    --yes skips the cost confirmation; required
+                                    when run non-interactively / from the UI)
 python cleanup_bad_rows.py          preview "bad" rows (no data) for removal
-python cleanup_bad_rows.py --delete actually remove them
+python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
+                                    (no undo — preview first, back up records.db;
+                                    note --ids-file rows not yet scraped match
+                                    the "bad" filter, so review before deleting)
 ```
 
 ## File layout (inside the install folder)
@@ -79,19 +94,21 @@ python cleanup_bad_rows.py --delete actually remove them
 ├── run.py                     scraper entry point
 ├── server.py                  Flask web UI entry point
 ├── analyze.py                 AI batch commands
+├── apply_update.py            stdlib-only update applier (used by Update.bat)
 ├── cleanup_bad_rows.py        dev utility for removing empty DB rows
 ├── requirements.txt
 │
 ├── records_tracker/           core modules
 │   ├── scraper.py             Playwright scraper against GovQA portal
-│   ├── database.py            SQLite schema + CRUD
+│   ├── database.py            SQLite schema + CRUD (WAL; is_support_sender())
 │   ├── excel_export.py        openpyxl export + override sync
 │   ├── ai.py                  Anthropic client wrapper (chat + audit)
 │   ├── chapter119.py          Florida PR law knowledge base
+│   ├── mdlite.py              safe Markdown-subset renderer for AI output
 │   └── config.py              load credentials.json + config.json
 │
 ├── templates/                 Jinja2 templates for the Flask UI
-├── static/                    CSS for the Flask UI
+├── static/                    CSS + vendored fonts (static/fonts/) for the UI
 │
 ├── venv/                      Python virtual env (created by Install.bat;
 │                              NEVER share or commit; regenerate if deleted)
@@ -101,6 +118,8 @@ python cleanup_bad_rows.py --delete actually remove them
 │
 ├── data/
 │   ├── records.db             SQLite database, the source of truth
+│   ├── records.db-wal/-shm    WAL sidecar files (auto-managed; leave them)
+│   ├── .secret_key            random Flask session key (auto-created)
 │   ├── records_analysis.xlsx  Excel snapshot, rewritten every scrape
 │   └── downloads/<REQ_ID>/    one folder per request with attachments
 │
@@ -173,6 +192,17 @@ Full schema is in `records_tracker/database.py` under `SCHEMA = """..."""`.
   between records — a full scrape of hundreds of requests will
   take hours. This is intentional; do NOT suggest lowering the
   delays without first telling the user why they exist.
+- **Web UI ↔ scraper concurrency.** The database runs in WAL mode with a
+  busy timeout, so the web UI can keep reading while a scrape writes (and
+  vice versa) without "database is locked" errors. This is why running
+  `Scrape.bat` while `Start.bat` is open is safe. The `records.db-wal` /
+  `-shm` sidecar files in `data/` are normal — don't delete them.
+- **Re-running a Chapter 119 audit replaces that request's prior AI findings**
+  rather than duplicating them; user-logged issues and any you've already
+  resolved/dismissed are preserved.
+- **Triggering work from the UI.** The Runs & Sync page can start a scrape or
+  `analyze.py all` as a background job; only one of each runs at a time
+  (overlapping portal logins would defeat the anti-detection pacing).
 - **The scraper is read-only** by design. It never clicks Submit,
   never accepts terms, never sends messages, never changes passwords.
   Only reads + triggers attachment downloads.
@@ -228,7 +258,13 @@ environment variable; `config.json` wins if both are set.
 - **"How do I mark a request as closed?"** — in the web UI, open the
   request detail page, use the Override form to tick "is closed".
   Persists forever, survives re-scrapes.
-- **"Where are my attachments?"** — `data/downloads/<REQUEST_ID>/`.
+- **"Where are my attachments?"** — on disk in
+  `data/downloads/<REQUEST_ID>/`, or just click a file's name on the request's
+  detail page to open it in the browser (and expand "View extracted text" to
+  read what the AI sees).
+- **"How do I scrape / run AI analysis without the command line?"** — use the
+  **Runs & Sync** page in the web UI: "Check for updates" (incremental scrape),
+  "Full scrape", or "Run AI analysis on all".
 - **"Why is X field blank?"** — most likely the portal redirected to
   `error.aspx` or `Login.aspx` for that one and we got nothing back.
   Look at the most recent log in `logs/`.

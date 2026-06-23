@@ -54,6 +54,18 @@ Double-click "Start.bat"
   use the program. Keep the black command window open while you're
   using it - closing that window stops the program.
 
+  In the web interface you can:
+    - See a Dashboard: how fast the city replies, which requests are
+      overdue, and how many you file each month.
+    - Browse, search, sort, and filter all your requests.
+    - Open any request to read every message, OPEN/download the files
+      the city sent, see an AI summary, and chat with Claude about it.
+    - Run a Florida Chapter 119 compliance audit and review (or print)
+      the flagged issues.
+    - From the "Runs & Sync" page, start a scrape or AI analysis
+      WITHOUT touching the command line, and see your run history.
+    - Switch between light and dark mode (button at the bottom-left).
+
 Double-click "Scrape.bat"
   Quickly checks the portal for updates on your OPEN requests and any
   new requests that have appeared. Fast. Run this whenever.
