@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ conv.title }} — Conversation{% endblock %}
+{% block content %}
+
+<p>
+  <a href="{{ url_for('global_analysis') if conv.scope == 'global' else url_for('request_detail', request_id=conv.request_id) }}">
+    ← back
+  </a>
+</p>
+
+<div class="header-flex">
+  <h1>{{ conv.title }}</h1>
+  <form method="post" action="{{ url_for('conversation_delete', conversation_id=conv.conversation_id) }}"
+        onsubmit="return confirm('Delete this conversation?');">
+    <button class="btn btn-danger" type="submit">Delete</button>
+  </form>
+</div>
+
+<p class="muted small">
+  Scope: {{ conv.scope }}{% if conv.request_id %} ({{ conv.request_id }}){% endif %}
+  · created {{ conv.created_at|fmt_dt }}
+  · last message {{ conv.updated_at|fmt_dt }}
+</p>
+
+<div class="chat">
+  {% for m in messages %}
+    <div class="turn turn-{{ m.role }}">
+      <div class="turn-head">
+        <strong>{{ m.role }}</strong>
+        {% if m.model %}<span class="muted small">{{ m.model }}</span>{% endif %}
+        <span class="muted small">{{ m.created_at|fmt_dt }}</span>
+      </div>
+      <div class="turn-body">{{ m.content }}</div>
+    </div>
+  {% endfor %}
+  {% if not messages %}
+    <p class="muted">No messages yet — send the first one below.</p>
+  {% endif %}
+</div>
+
+<form method="post" action="{{ url_for('conversation_send', conversation_id=conv.conversation_id) }}"
+      class="chat-input">
+  <textarea name="message" rows="4"
+            placeholder="Ask a question about this record, its messages, attachments, or Chapter 119 compliance…"
+            required></textarea>
+  <button class="btn btn-primary" type="submit">Send</button>
+</form>
+
+{% endblock %}

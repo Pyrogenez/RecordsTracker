@@ -1,0 +1,17 @@
+# Records Tracker — local artifacts that must never be shared or committed
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# User data and secrets (preserved across updates; never shipped)
+credentials.json
+config.json
+data/
+logs/
+.update_backup/
+.applied_updates/
+
+# Excel temp files
+*.xlsx.tmp
+~$*.xlsx

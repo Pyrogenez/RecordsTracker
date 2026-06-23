@@ -1,0 +1,103 @@
+Using Records Tracker with Claude Cowork
+=========================================
+
+If you have Claude Cowork (the desktop app), Claude can run Scrape.bat,
+read your logs, tweak config.json, write quick queries against your
+database, and answer questions about your records for you.  Here is
+the fastest way to get up and running.
+
+
+STEP 1 - Install Claude Cowork
+-------------------------------
+If you don't already have it:
+
+  1. Go to https://claude.ai/download
+  2. Download the desktop app for Windows.
+  3. Install it and sign in with your Anthropic account.
+  4. On first launch, enable "Cowork mode" if prompted.
+
+
+STEP 2 - Point Claude at this folder
+-------------------------------------
+Claude needs permission to read and write files in the folder where
+this program lives.  This is a one-time setup.
+
+  1. Open Claude Cowork.
+  2. Start a new conversation.
+  3. Click the paperclip / "Select folder" button (exact location
+     depends on the app version - it's usually near the chat box).
+  4. Browse to the folder where you unzipped this program (the same
+     folder that contains Install.bat and Start.bat).
+  5. Select it.
+
+Claude now has read + write access to that folder for this
+conversation.  Any files you create or edit in future conversations
+will need the same permission granted.
+
+
+STEP 3 - Give Claude the context it needs
+------------------------------------------
+The file AI_CONTEXT.md in this folder explains what the program is,
+how it works, where data lives, and what the common commands do.
+
+Tell Claude to read it.  Just paste this as your first message:
+
+----------------------------------------------------------------
+  Please read AI_CONTEXT.md in this folder before we start.
+  It explains the Records Tracker program I'm using - the scraper,
+  the database schema, the web UI, and the AI analysis layer.
+  After you've read it, I'll ask you for help with the program.
+----------------------------------------------------------------
+
+Claude will read the file and be ready to help.
+
+
+STEP 4 - Try it out
+--------------------
+Here are some starter prompts.  Copy and paste any of these into Claude:
+
+  "Run Scrape.bat for me and summarize what changed."
+
+  "Which of my requests have been open the longest without a reply?
+   Query the database directly - records.db is in the data folder."
+
+  "Open my most recent log file in logs/ and tell me if anything
+   looks wrong."
+
+  "Start the web UI (Start.bat) and then walk me through the
+   Compliance dashboard."
+
+  "Look at config.json and explain what each setting does."
+
+  "I got an update zip called update-1.1.0.zip.  Put it in this
+   folder and run Update.bat for me.  Tell me what changed."
+
+  "Find every request that mentions body cam footage and list the
+   request IDs with their status."
+
+
+TIPS
+----
+
+Keep Claude's console windows open.
+  When Claude runs Start.bat or Scrape.bat, a black command window
+  pops up.  Closing that window stops the program.  Leave it open
+  while you're using the web UI.
+
+Don't share credentials.json.
+  Your portal password lives in credentials.json in this folder in
+  plain text.  If you ask Claude to "share this folder" or "send
+  this somewhere", double-check that credentials.json is not in the
+  zip or attachment.  Claude will warn you, but you are the last
+  line of defense.
+
+If Claude seems confused, re-paste AI_CONTEXT.md.
+  Each new conversation starts without context.  The one-line
+  "please read AI_CONTEXT.md" prompt is the fastest way to get
+  Claude up to speed again.
+
+Updates come as .zip files.
+  When the person who gave you this program sends an update, save
+  the .zip into this folder and run Update.bat (or ask Claude to
+  run it).  Your login, database, and downloaded files are
+  preserved.

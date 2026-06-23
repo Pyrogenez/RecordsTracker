@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Requests — St. Pete Tracker{% endblock %}
+{% block content %}
+
+<section class="stats">
+  <div class="stat"><div class="n">{{ counts.total_requests }}</div><div class="l">Requests</div></div>
+  <div class="stat"><div class="n">{{ counts.open_requests }}</div><div class="l">Open</div></div>
+  <div class="stat"><div class="n">{{ counts.user_closed_requests }}</div><div class="l">User-closed</div></div>
+  <div class="stat"><div class="n">{{ counts.total_messages }}</div><div class="l">Messages</div></div>
+  <div class="stat"><div class="n">{{ counts.total_attachments }}</div><div class="l">Attachments</div></div>
+  <div class="stat"><div class="n">{{ counts.downloaded_attachments }}</div><div class="l">Downloaded</div></div>
+  <div class="stat"><div class="n">{{ counts.compliance_issues_open }}</div><div class="l">Open compliance issues</div></div>
+</section>
+
+{% if last_run %}
+  <p class="muted">
+    Last run: <strong>{{ last_run.mode or '?' }}</strong> —
+    started {{ last_run.started_at|fmt_dt }},
+    finished {{ (last_run.finished_at or '(still running)')|fmt_dt }}.
+    scraped {{ last_run.requests_scraped }},
+    skipped {{ last_run.requests_skipped or 0 }},
+    new {{ last_run.new_requests }} req / {{ last_run.new_messages }} msg / {{ last_run.new_attachments }} att.
+    {% if last_run.error %}<span class="err">error: {{ last_run.error }}</span>{% endif %}
+  </p>
+{% else %}
+  <p class="muted">No runs recorded yet. Run <code>python run.py --full</code> once to populate the database.</p>
+{% endif %}
+
+<h2>All requests</h2>
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Request</th>
+      <th>Dept</th>
+      <th>Status</th>
+      <th>Submitted</th>
+      <th>First reply</th>
+      <th>Time to reply</th>
+      <th>Issues</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in requests %}
+      <tr class="{% if r._is_closed %}row-closed{% endif %}">
+        <td>
+          <a href="{{ url_for('request_detail', request_id=r.request_id) }}">
+            <strong>{{ r.request_id }}</strong>
+          </a>
+          <div class="muted small">{{ (r.description or '')[:100] }}{% if (r.description or '')|length > 100 %}…{% endif %}</div>
+        </td>
+        <td>{{ r.department or '—' }}</td>
+        <td>
+          <span class="badge">{{ r.status or r.final_state or '—' }}</span>
+          {% if r._is_closed %}<span class="badge badge-closed">closed</span>{% endif %}
+        </td>
+        <td>{{ r.submission_time|fmt_dt }}</td>
+        <td>{{ r.first_real_reply_time|fmt_dt or '—' }}</td>
+        <td>{{ r.hours_to_first_reply|fmt_hours }}</td>
+        <td>
+          {% if r._open_issues %}
+            <span class="pill sev-high">{{ r._open_issues }}</span>
+          {% endif %}
+        </td>
+        <td><a class="btn btn-small" href="{{ url_for('request_detail', request_id=r.request_id) }}">Open</a></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

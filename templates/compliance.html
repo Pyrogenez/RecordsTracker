@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Compliance dashboard{% endblock %}
+{% block content %}
+
+<h1>Compliance dashboard</h1>
+<p class="muted">
+  Potential violations of Florida Public Records Law (Chapter 119) flagged
+  by the AI auditor or logged manually. Change an issue's status to
+  "resolved" once the city has fixed it, or "dismissed" if it's a false
+  positive.
+</p>
+
+<div class="filter-row">
+  <a class="btn btn-small {% if status_filter == 'open' %}btn-primary{% endif %}"
+     href="{{ url_for('compliance_dashboard', status='open') }}">Open</a>
+  <a class="btn btn-small {% if status_filter == 'resolved' %}btn-primary{% endif %}"
+     href="{{ url_for('compliance_dashboard', status='resolved') }}">Resolved</a>
+  <a class="btn btn-small {% if status_filter == 'dismissed' %}btn-primary{% endif %}"
+     href="{{ url_for('compliance_dashboard', status='dismissed') }}">Dismissed</a>
+  <a class="btn btn-small {% if status_filter == 'all' %}btn-primary{% endif %}"
+     href="{{ url_for('compliance_dashboard', status='all') }}">All</a>
+</div>
+
+{% if issues %}
+  {% for rid, rows in by_request.items() %}
+    <section class="compliance-group">
+      <h2><a href="{{ url_for('request_detail', request_id=rid) }}">{{ rid }}</a></h2>
+      <ul class="issue-list">
+        {% for iss in rows %}
+          <li class="issue {{ iss.severity|severity_class }}">
+            <div class="issue-head">
+              <strong>{{ iss.issue_type }}</strong>
+              <span class="muted small">
+                {{ iss.statute_section or '' }} • severity {{ iss.severity or '?' }}
+                • identified {{ iss.identified_by }} • status {{ iss.status }}
+              </span>
+            </div>
+            <div>{{ iss.description }}</div>
+            {% if iss.evidence %}<div class="muted small">evidence: {{ iss.evidence[:400] }}</div>{% endif %}
+            {% if iss.user_notes %}<div class="small">notes: {{ iss.user_notes }}</div>{% endif %}
+
+            <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form">
+              <select name="severity">
+                <option value="">— severity —</option>
+                <option value="low"    {% if iss.severity == 'low'    %}selected{% endif %}>low</option>
+                <option value="medium" {% if iss.severity == 'medium' %}selected{% endif %}>medium</option>
+                <option value="high"   {% if iss.severity == 'high'   %}selected{% endif %}>high</option>
+              </select>
+              <select name="status">
+                <option value="open"      {% if iss.status == 'open' %}selected{% endif %}>open</option>
+                <option value="resolved"  {% if iss.status == 'resolved' %}selected{% endif %}>resolved</option>
+                <option value="dismissed" {% if iss.status == 'dismissed' %}selected{% endif %}>dismissed</option>
+              </select>
+              <input type="text" name="user_notes" value="{{ iss.user_notes or '' }}" placeholder="notes">
+              <button class="btn btn-small" type="submit">Save</button>
+            </form>
+            <form method="post" action="{{ url_for('compliance_delete', issue_id=iss.issue_id) }}"
+                  class="inline-form" onsubmit="return confirm('Delete this issue?')">
+              <button class="btn btn-small btn-danger" type="submit">Delete</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endfor %}
+{% else %}
+  <p class="muted">No issues match this filter.</p>
+{% endif %}
+
+<h2>Log an issue manually</h2>
+<form method="post" action="{{ url_for('compliance_new') }}" class="stack-form">
+  <label>Request ID
+    <input type="text" name="request_id" required placeholder="P121302-042026">
+  </label>
+  <label>Statute section
+    <input type="text" name="statute_section" placeholder="119.07(1)(a)">
+  </label>
+  <label>Issue type
+    <input type="text" name="issue_type" required placeholder="unreasonable_delay">
+  </label>
+  <label>Severity
+    <select name="severity">
+      <option value="low">low</option>
+      <option value="medium" selected>medium</option>
+      <option value="high">high</option>
+    </select>
+  </label>
+  <label>Description
+    <textarea name="description" rows="3" required></textarea>
+  </label>
+  <label>Evidence (quote / message id)
+    <textarea name="evidence" rows="2"></textarea>
+  </label>
+  <button class="btn btn-primary" type="submit">Log issue</button>
+</form>
+
+{% endblock %}

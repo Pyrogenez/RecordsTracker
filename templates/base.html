@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}St. Pete Public Records Tracker{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a href="{{ url_for('index') }}">St. Pete Public Records Tracker</a>
+    </div>
+    <nav>
+      <a href="{{ url_for('index') }}">Requests</a>
+      <a href="{{ url_for('global_analysis') }}">Global Analysis</a>
+      <a href="{{ url_for('compliance_dashboard') }}">Compliance</a>
+    </nav>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flashes">
+        {% for cat, msg in messages %}
+          <div class="flash flash-{{ cat }}">{{ msg }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <small>
+      Read-only tracker built on top of the St. Petersburg GovQA portal.
+      Never modifies data on the portal.
+    </small>
+  </footer>
+</body>
+</html>
