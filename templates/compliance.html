@@ -1,97 +1,96 @@
 {% extends "base.html" %}
-{% block title %}Compliance dashboard{% endblock %}
-{% block content %}
+{% block title %}Compliance — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Florida Chapter 119</div>{% endblock %}
+{% block pagetitle %}Compliance{% endblock %}
+{% block topactions %}
+  <a class="btn" href="{{ url_for('compliance_report') }}" target="_blank" rel="noopener">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5h20v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+    Printable report
+  </a>
+{% endblock %}
 
-<h1>Compliance dashboard</h1>
-<p class="muted">
-  Potential violations of Florida Public Records Law (Chapter 119) flagged
-  by the AI auditor or logged manually. Change an issue's status to
-  "resolved" once the city has fixed it, or "dismissed" if it's a false
-  positive.
+{% block content %}
+<p class="muted" style="max-width:70ch">
+  Potential violations of Florida Public Records Law (Chapter 119) flagged by the
+  AI auditor or logged manually. Mark an issue <strong>resolved</strong> once the
+  city fixes it, or <strong>dismissed</strong> if it's a false positive.
+  This is a research aid, not legal advice.
 </p>
 
-<div class="filter-row">
-  <a class="btn btn-small {% if status_filter == 'open' %}btn-primary{% endif %}"
-     href="{{ url_for('compliance_dashboard', status='open') }}">Open</a>
-  <a class="btn btn-small {% if status_filter == 'resolved' %}btn-primary{% endif %}"
-     href="{{ url_for('compliance_dashboard', status='resolved') }}">Resolved</a>
-  <a class="btn btn-small {% if status_filter == 'dismissed' %}btn-primary{% endif %}"
-     href="{{ url_for('compliance_dashboard', status='dismissed') }}">Dismissed</a>
-  <a class="btn btn-small {% if status_filter == 'all' %}btn-primary{% endif %}"
-     href="{{ url_for('compliance_dashboard', status='all') }}">All</a>
+<div class="toolbar">
+  <div class="seg" role="tablist" aria-label="Filter issues by status">
+    {% for key, label in [('open','Open'),('resolved','Resolved'),('dismissed','Dismissed'),('all','All')] %}
+      <a href="{{ url_for('compliance_dashboard', status=key) }}" class="{{ 'active' if status_filter == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
 </div>
 
 {% if issues %}
   {% for rid, rows in by_request.items() %}
     <section class="compliance-group">
-      <h2><a href="{{ url_for('request_detail', request_id=rid) }}">{{ rid }}</a></h2>
+      <h2><a href="{{ url_for('request_detail', request_id=rid) }}">{{ rid }}</a>
+        <span class="muted small">{{ rows|length }} issue(s)</span></h2>
       <ul class="issue-list">
         {% for iss in rows %}
           <li class="issue {{ iss.severity|severity_class }}">
             <div class="issue-head">
-              <strong>{{ iss.issue_type }}</strong>
-              <span class="muted small">
-                {{ iss.statute_section or '' }} • severity {{ iss.severity or '?' }}
-                • identified {{ iss.identified_by }} • status {{ iss.status }}
-              </span>
+              <span class="issue-type">{{ iss.issue_type }}</span>
+              <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
+              {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
+              <span class="chip">by {{ iss.identified_by }}</span>
+              <span class="chip {{ 'open' if iss.status=='open' }}">{{ iss.status }}</span>
             </div>
-            <div>{{ iss.description }}</div>
-            {% if iss.evidence %}<div class="muted small">evidence: {{ iss.evidence[:400] }}</div>{% endif %}
-            {% if iss.user_notes %}<div class="small">notes: {{ iss.user_notes }}</div>{% endif %}
-
-            <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form">
-              <select name="severity">
-                <option value="">— severity —</option>
-                <option value="low"    {% if iss.severity == 'low'    %}selected{% endif %}>low</option>
-                <option value="medium" {% if iss.severity == 'medium' %}selected{% endif %}>medium</option>
-                <option value="high"   {% if iss.severity == 'high'   %}selected{% endif %}>high</option>
-              </select>
-              <select name="status">
-                <option value="open"      {% if iss.status == 'open' %}selected{% endif %}>open</option>
-                <option value="resolved"  {% if iss.status == 'resolved' %}selected{% endif %}>resolved</option>
-                <option value="dismissed" {% if iss.status == 'dismissed' %}selected{% endif %}>dismissed</option>
-              </select>
-              <input type="text" name="user_notes" value="{{ iss.user_notes or '' }}" placeholder="notes">
-              <button class="btn btn-small" type="submit">Save</button>
-            </form>
-            <form method="post" action="{{ url_for('compliance_delete', issue_id=iss.issue_id) }}"
-                  class="inline-form" onsubmit="return confirm('Delete this issue?')">
-              <button class="btn btn-small btn-danger" type="submit">Delete</button>
-            </form>
+            {% if iss.statute_section %}<div class="issue-meta">§ {{ iss.statute_section }}</div>{% endif %}
+            <div style="margin:6px 0">{{ iss.description }}</div>
+            {% if iss.evidence %}<div class="muted small">Evidence: {{ iss.evidence[:400] }}</div>{% endif %}
+            {% if iss.user_notes %}<div class="small" style="margin-top:4px">Notes: {{ iss.user_notes }}</div>{% endif %}
+            <div class="inline-form" style="margin-top:9px">
+              <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form">
+                <label class="sr-only" for="sev-{{ iss.issue_id }}">Severity</label>
+                <select name="severity" id="sev-{{ iss.issue_id }}">
+                  <option value="">— severity —</option>
+                  {% for s in ['low','medium','high'] %}<option value="{{ s }}" {{ 'selected' if iss.severity == s }}>{{ s }}</option>{% endfor %}
+                </select>
+                <label class="sr-only" for="sta-{{ iss.issue_id }}">Status</label>
+                <select name="status" id="sta-{{ iss.issue_id }}">
+                  {% for s in ['open','resolved','dismissed'] %}<option value="{{ s }}" {{ 'selected' if iss.status == s }}>{{ s }}</option>{% endfor %}
+                </select>
+                <label class="sr-only" for="note-{{ iss.issue_id }}">Notes</label>
+                <input type="text" name="user_notes" id="note-{{ iss.issue_id }}" value="{{ iss.user_notes or '' }}" placeholder="notes">
+                <button class="btn btn-small" type="submit">Save</button>
+              </form>
+              <form method="post" action="{{ url_for('compliance_delete', issue_id=iss.issue_id) }}" onsubmit="return confirm('Delete this issue?')">
+                <button class="btn btn-small btn-danger" type="submit">Delete</button>
+              </form>
+            </div>
           </li>
         {% endfor %}
       </ul>
     </section>
   {% endfor %}
 {% else %}
-  <p class="muted">No issues match this filter.</p>
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>
+    <div class="big">No issues match this filter</div>
+    <p>Run a Chapter 119 audit from a request's page, or log one manually below.</p>
+  </div>
 {% endif %}
 
 <h2>Log an issue manually</h2>
-<form method="post" action="{{ url_for('compliance_new') }}" class="stack-form">
-  <label>Request ID
-    <input type="text" name="request_id" required placeholder="P121302-042026">
-  </label>
-  <label>Statute section
-    <input type="text" name="statute_section" placeholder="119.07(1)(a)">
-  </label>
-  <label>Issue type
-    <input type="text" name="issue_type" required placeholder="unreasonable_delay">
-  </label>
-  <label>Severity
-    <select name="severity">
-      <option value="low">low</option>
-      <option value="medium" selected>medium</option>
-      <option value="high">high</option>
+<form method="post" action="{{ url_for('compliance_new') }}" class="form-card" style="max-width:640px">
+  <div class="field">
+    <label for="new-rid">Request</label>
+    <select name="request_id" id="new-rid" required>
+      <option value="">— choose a request —</option>
+      {% for rid in all_request_ids %}<option value="{{ rid }}">{{ rid }}</option>{% endfor %}
     </select>
-  </label>
-  <label>Description
-    <textarea name="description" rows="3" required></textarea>
-  </label>
-  <label>Evidence (quote / message id)
-    <textarea name="evidence" rows="2"></textarea>
-  </label>
+  </div>
+  <div class="field"><label for="new-statute">Statute section</label><input type="text" name="statute_section" id="new-statute" placeholder="119.07(1)(a)"></div>
+  <div class="field"><label for="new-type">Issue type</label><input type="text" name="issue_type" id="new-type" placeholder="unreasonable_delay" required></div>
+  <div class="field"><label for="new-sev">Severity</label>
+    <select name="severity" id="new-sev"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+  <div class="field"><label for="new-desc">Description</label><textarea name="description" id="new-desc" rows="3" required></textarea></div>
+  <div class="field"><label for="new-ev">Evidence (quote / message id)</label><textarea name="evidence" id="new-ev" rows="2"></textarea></div>
   <button class="btn btn-primary" type="submit">Log issue</button>
 </form>
-
 {% endblock %}

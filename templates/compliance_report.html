@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Compliance report — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Generated {{ generated }}</div>{% endblock %}
+{% block pagetitle %}Compliance report{% endblock %}
+{% block topactions %}
+  <button class="btn btn-primary no-print" type="button" onclick="window.print()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5h20v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+    Print / Save as PDF
+  </button>
+{% endblock %}
+
+{% block content %}
+<p class="muted">
+  Potential Florida Chapter 119 issues{% if request_id %} for {{ request_id }}{% endif %},
+  excluding dismissed. AI-identified findings are a research aid, not legal advice;
+  verify against the current statute and case law before any enforcement action.
+</p>
+
+{% if by_request %}
+  {% for rid, rows in by_request.items() %}
+    <div class="card">
+      <h2 style="margin-top:0">{{ rid }}</h2>
+      {% if reqs[rid] %}
+        <dl class="kv">
+          <dt>Department</dt><dd>{{ reqs[rid].department or '—' }}</dd>
+          <dt>Submitted</dt><dd class="tnum">{{ reqs[rid].submission_time|fmt_dt or '—' }}</dd>
+          <dt>First real reply</dt><dd class="tnum">{{ reqs[rid].first_real_reply_time|fmt_dt or '—' }}</dd>
+          <dt>Time to reply</dt><dd class="tnum">{{ reqs[rid].hours_to_first_reply|fmt_hours }}</dd>
+        </dl>
+      {% endif %}
+      {% if assessments[rid] and assessments[rid].overall_assessment %}
+        <h3>Overall assessment</h3>
+        <div class="md-body">{{ assessments[rid].overall_assessment|md|safe }}</div>
+      {% endif %}
+      <h3>Findings</h3>
+      <ul class="issue-list">
+        {% for iss in rows %}
+          <li class="issue {{ iss.severity|severity_class }}">
+            <div class="issue-head">
+              <span class="issue-type">{{ iss.issue_type }}</span>
+              <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
+              {% if iss.statute_section %}<span class="chip">§ {{ iss.statute_section }}</span>{% endif %}
+              {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
+              <span class="chip">{{ iss.status }}</span>
+            </div>
+            <div style="margin:6px 0">{{ iss.description }}</div>
+            {% if iss.evidence %}<div class="muted small">Evidence: {{ iss.evidence }}</div>{% endif %}
+            {% if iss.user_notes %}<div class="small" style="margin-top:4px">Notes: {{ iss.user_notes }}</div>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty-state"><div class="big">No issues to report</div></div>
+{% endif %}
+{% endblock %}

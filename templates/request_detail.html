@@ -1,135 +1,184 @@
 {% extends "base.html" %}
-{% block title %}{{ r.request_id }} — St. Pete Tracker{% endblock %}
+{% block title %}{{ r.request_id }} — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Request</div>{% endblock %}
+{% block pagetitle %}{{ r.request_id }}{% if is_closed %} <span class="chip closed">closed</span>{% endif %}{% endblock %}
+{% block topactions %}
+  {% if ai_enabled %}
+  <form method="post" action="{{ url_for('request_audit', request_id=r.request_id) }}" class="ai-action">
+    <button class="btn btn-ai" type="submit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      Run Chapter 119 audit
+    </button>
+  </form>
+  <form method="post" action="{{ url_for('request_summarize', request_id=r.request_id) }}" class="ai-action">
+    <button class="btn" type="submit">Refresh AI summary</button>
+  </form>
+  <form method="post" action="{{ url_for('conversation_new') }}">
+    <input type="hidden" name="scope" value="request">
+    <input type="hidden" name="request_id" value="{{ r.request_id }}">
+    <input type="hidden" name="title" value="Chat — {{ r.request_id }}">
+    <button class="btn btn-brand" type="submit">Ask AI →</button>
+  </form>
+  {% else %}
+    <span class="chip">Add an API key in config.json to enable AI features</span>
+  {% endif %}
+{% endblock %}
+
 {% block content %}
-
-<p><a href="{{ url_for('index') }}">← all requests</a></p>
-
-<div class="header-flex">
-  <h1>{{ r.request_id }}
-    {% if is_closed %}<span class="badge badge-closed">closed</span>{% endif %}
-  </h1>
-  <div class="actions">
-    <form method="post" action="{{ url_for('request_audit', request_id=r.request_id) }}" style="display:inline">
-      <button class="btn btn-primary" type="submit">Run Chapter 119 audit</button>
-    </form>
-    <form method="post" action="{{ url_for('request_summarize', request_id=r.request_id) }}" style="display:inline">
-      <button class="btn" type="submit">Refresh AI summary</button>
-    </form>
-    <form method="post" action="{{ url_for('conversation_new') }}" style="display:inline">
-      <input type="hidden" name="scope" value="request">
-      <input type="hidden" name="request_id" value="{{ r.request_id }}">
-      <input type="hidden" name="title" value="Chat — {{ r.request_id }}">
-      <button class="btn btn-accent" type="submit">Analyze with AI →</button>
-    </form>
-  </div>
-</div>
+<a class="back-link" href="{{ url_for('index') }}">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> All requests
+</a>
 
 <section class="grid-2">
   <div>
-    <h3>Metadata</h3>
-    <dl class="kv">
-      <dt>Status</dt><dd>{{ r.status or '—' }} / portal final: {{ r.final_state or '—' }}</dd>
-      <dt>Type</dt><dd>{{ r.request_type or '—' }}</dd>
-      <dt>Category</dt><dd>{{ r.category or '—' }}</dd>
-      <dt>Department</dt><dd>{{ r.department or '—' }}</dd>
-      <dt>Records type</dt><dd>{{ r.records_type or '—' }}</dd>
-      <dt>Preferred method</dt><dd>{{ r.preferred_method or '—' }}</dd>
-      <dt>Submitted</dt><dd>{{ r.submission_time|fmt_dt or '—' }}</dd>
-      <dt>First auto-ack</dt><dd>{{ r.first_auto_ack_time|fmt_dt or '—' }}</dd>
-      <dt>First real reply</dt><dd>{{ r.first_real_reply_time|fmt_dt or '—' }}</dd>
-      <dt>Time to reply</dt><dd>{{ r.hours_to_first_reply|fmt_hours }}</dd>
-      <dt>Last modified</dt><dd>{{ r.last_modified_at|fmt_dt or '—' }}</dd>
-    </dl>
+    <div class="card">
+      <h3>Details</h3>
+      <dl class="kv">
+        <dt>Status</dt><dd>{{ r.status or '—' }} <span class="muted small">/ portal: {{ r.final_state or '—' }}</span></dd>
+        <dt>Type</dt><dd>{{ r.request_type or '—' }}</dd>
+        <dt>Category</dt><dd>{{ r.category or '—' }}</dd>
+        <dt>Department</dt><dd>{{ r.department or '—' }}</dd>
+        <dt>Records type</dt><dd>{{ r.records_type or '—' }}</dd>
+        <dt>Preferred method</dt><dd>{{ r.preferred_method or '—' }}</dd>
+        <dt>Submitted</dt><dd class="tnum">{{ r.submission_time|fmt_dt or '—' }}</dd>
+        <dt>First auto-ack</dt><dd class="tnum">{{ r.first_auto_ack_time|fmt_dt or '—' }}</dd>
+        <dt>First real reply</dt><dd class="tnum">{{ r.first_real_reply_time|fmt_dt or '—' }}</dd>
+        <dt>Time to reply</dt><dd class="tnum">{{ r.hours_to_first_reply|fmt_hours }}</dd>
+        <dt>Last modified</dt><dd class="tnum">{{ r.last_modified_at|fmt_dt or '—' }}</dd>
+      </dl>
+    </div>
 
-    <h3>Description</h3>
-    <div class="box">{{ r.description or '(none)' }}</div>
+    <div class="card">
+      <h3>Request description</h3>
+      <div class="box">{{ r.description or '(none)' }}</div>
+    </div>
 
     {% if summary %}
-      <h3>AI summary <span class="muted small">({{ summary.model or '?' }}, {{ summary.updated_at|fmt_dt }})</span></h3>
-      <div class="box">{{ summary.summary }}</div>
+    <div class="card">
+      <h3>AI summary <span class="muted small">— {{ summary.model or '?' }}, {{ summary.updated_at|fmt_dt }}</span></h3>
+      <div class="md-body">{{ summary.summary|md|safe }}</div>
+    </div>
+    {% endif %}
+
+    {% if assessment and (assessment.overall_assessment or assessment.recommended_actions) %}
+    <div class="card">
+      <h3>Latest audit assessment</h3>
+      <div class="assess">
+        {% if assessment.overall_assessment %}<div class="md-body">{{ assessment.overall_assessment|md|safe }}</div>{% endif %}
+        {% if assessment.recommended_actions %}
+          <h4 style="margin-top:10px">Recommended actions</h4>
+          <ul class="md-body">{% for a in assessment.recommended_actions %}<li>{{ a }}</li>{% endfor %}</ul>
+        {% endif %}
+      </div>
+    </div>
     {% endif %}
   </div>
 
   <div>
-    <h3>Override <span class="muted small">(manual correction)</span></h3>
-    <form method="post" action="{{ url_for('request_override', request_id=r.request_id) }}" class="override-form">
-      <label>
-        <input type="checkbox" name="is_closed" value="1"
-               {% if override and override.is_closed %}checked{% endif %}>
-        Treat as closed — skip this request on incremental runs
-      </label>
-      <label>First-real-reply message ID
-        <input type="text" name="first_real_reply_message_id"
-               value="{{ (override.first_real_reply_message_id if override else '') or '' }}"
-               placeholder="e.g. 123456">
-      </label>
-      <label>Notes
-        <textarea name="notes" rows="2">{{ (override.notes if override else '') or '' }}</textarea>
-      </label>
-      <button type="submit" class="btn btn-small">Save override</button>
-    </form>
+    <div class="card">
+      <h3>Manual override</h3>
+      <form method="post" action="{{ url_for('request_override', request_id=r.request_id) }}" class="stack">
+        <label class="check">
+          <input type="checkbox" name="is_closed" value="1" {{ 'checked' if override and override.is_closed }}>
+          <span>Treat as closed — the quick “Check for updates” scrape will stop
+            checking this request for new replies. Only a Full Scrape updates it.
+            Untick to resume.</span>
+        </label>
+        <div class="field">
+          <label for="fr-select">First real reply</label>
+          <select name="first_real_reply_message_id" id="fr-select">
+            <option value="">— auto-detect —</option>
+            {% for m in messages %}
+              <option value="{{ m.message_id }}" {{ 'selected' if override and override.first_real_reply_message_id == m.message_id }}>
+                {{ m.sent_at|fmt_dt }} · {{ m.sender[:22] }}{% if m.subject %} · {{ m.subject[:30] }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ov-notes">Notes</label>
+          <textarea name="notes" id="ov-notes" rows="2">{{ (override.notes if override else '') or '' }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-small">Save override</button>
+      </form>
+    </div>
 
-    <h3>Compliance issues
-      {% if issues %}<span class="pill sev-high">{{ issues|length }}</span>{% endif %}
-    </h3>
-    {% if issues %}
-      <ul class="issue-list">
-        {% for iss in issues %}
-          <li class="issue {{ iss.severity|severity_class }}">
-            <div class="issue-head">
-              <strong>{{ iss.issue_type }}</strong>
-              <span class="muted small">
-                {{ iss.statute_section or '' }} • severity {{ iss.severity or '?' }}
-                • status {{ iss.status }}
-              </span>
-            </div>
-            <div>{{ iss.description }}</div>
-            {% if iss.evidence %}<div class="muted small">evidence: {{ iss.evidence[:300] }}</div>{% endif %}
-            <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}"
-                  class="inline-form">
-              <select name="status">
-                <option value="open"      {% if iss.status == 'open'      %}selected{% endif %}>open</option>
-                <option value="resolved"  {% if iss.status == 'resolved'  %}selected{% endif %}>resolved</option>
-                <option value="dismissed" {% if iss.status == 'dismissed' %}selected{% endif %}>dismissed</option>
-              </select>
-              <button class="btn btn-small" type="submit">Update</button>
-            </form>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="muted">No issues logged yet. Use the "Run Chapter 119 audit" button above.</p>
-    {% endif %}
+    <div class="card">
+      <h3>Compliance issues {% if issues %}<span class="count-pill">{{ issues|length }}</span>{% endif %}</h3>
+      {% if issues %}
+        <ul class="issue-list">
+          {% for iss in issues %}
+            <li class="issue {{ iss.severity|severity_class }}">
+              <div class="issue-head">
+                <span class="issue-type">{{ iss.issue_type }}</span>
+                <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
+                {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
+                <span class="chip">{{ iss.status }}</span>
+              </div>
+              {% if iss.statute_section %}<div class="issue-meta">§ {{ iss.statute_section }} · by {{ iss.identified_by }}</div>{% endif %}
+              <div class="small" style="margin:5px 0">{{ iss.description }}</div>
+              {% if iss.evidence %}<div class="muted small">Evidence: {{ iss.evidence[:300] }}</div>{% endif %}
+              <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form" style="margin-top:7px">
+                <label class="sr-only" for="st-{{ iss.issue_id }}">Status</label>
+                <select name="status" id="st-{{ iss.issue_id }}">
+                  {% for s in ['open','resolved','dismissed'] %}<option value="{{ s }}" {{ 'selected' if iss.status == s }}>{{ s }}</option>{% endfor %}
+                </select>
+                <button class="btn btn-small" type="submit">Update</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted small">No issues logged.{% if ai_enabled %} Use “Run Chapter 119 audit” above.{% endif %}</p>
+      {% endif %}
+      <details class="disclosure">
+        <summary>Log an issue manually</summary>
+        <div class="body">
+          <form method="post" action="{{ url_for('compliance_new') }}" class="stack">
+            <input type="hidden" name="request_id" value="{{ r.request_id }}">
+            <div class="field"><label>Issue type</label><input type="text" name="issue_type" placeholder="e.g. excessive_fee" required></div>
+            <div class="field"><label>Statute section</label><input type="text" name="statute_section" placeholder="119.07(1)(a)"></div>
+            <div class="field"><label>Severity</label>
+              <select name="severity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+            <div class="field"><label>Description</label><textarea name="description" rows="2" required></textarea></div>
+            <button class="btn btn-small btn-primary" type="submit">Log issue</button>
+          </form>
+        </div>
+      </details>
+    </div>
 
-    <h3>Saved AI conversations</h3>
-    {% if conversations %}
-      <ul>
-        {% for c in conversations %}
-          <li>
-            <a href="{{ url_for('conversation_view', conversation_id=c.conversation_id) }}">
-              {{ c.title }}
-            </a>
-            <span class="muted small">{{ c.updated_at|fmt_dt }}</span>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="muted">No conversations yet.</p>
-    {% endif %}
+    <div class="card">
+      <h3>Saved AI conversations</h3>
+      {% if conversations %}
+        <ul class="stack" style="list-style:none;padding:0;margin:0">
+          {% for c in conversations %}
+            <li><a href="{{ url_for('conversation_view', conversation_id=c.conversation_id) }}">{{ c.title }}</a>
+              <span class="muted small">· {{ c.updated_at|fmt_dt }}</span></li>
+          {% endfor %}
+        </ul>
+      {% else %}<p class="muted small">No conversations yet.</p>{% endif %}
+    </div>
   </div>
 </section>
 
-<h2>Messages ({{ messages|length }})</h2>
+<h2>Messages <span class="muted">({{ messages|length }})</span></h2>
 <div class="messages">
   {% for m in messages %}
-    <div class="msg {% if m.sender == 'STPETEFL Support' %}msg-support{% else %}msg-you{% endif %}">
+    <div class="msg {{ 'msg-support' if m._is_support else 'msg-you' }}">
       <div class="msg-head">
-        <strong>{{ m.sender }}</strong>
-        <span class="muted small">{{ m.sent_at|fmt_dt }} · msg {{ m.message_id }}</span>
-        {% if m._classification %}
-          <span class="pill cls-{{ m._classification }}">{{ m._classification }}</span>
+        <span class="who">{{ m.sender }}</span>
+        <span class="muted small tnum">{{ m.sent_at|fmt_dt }}</span>
+        {% if m._classification %}<span class="chip cls-{{ m._classification }}">{{ m._classification }}</span>{% endif %}
+        {% if m.is_auto_ack %}<span class="chip">auto-ack</span>{% endif %}
+        {% if m._is_support %}
+          <form method="post" action="{{ url_for('request_set_first_reply', request_id=r.request_id) }}" class="first-reply-btn">
+            <input type="hidden" name="message_id" value="{{ m.message_id }}">
+            <button class="btn btn-small btn-ghost" type="submit"
+              title="Mark this as the first substantive reply (used for time-to-reply)">
+              {% if override and override.first_real_reply_message_id == m.message_id %}★ first reply{% else %}☆ set first reply{% endif %}
+            </button>
+          </form>
         {% endif %}
-        {% if m.is_auto_ack %}<span class="pill">auto-ack</span>{% endif %}
       </div>
       {% if m.subject %}<div class="muted small">{{ m.subject }}</div>{% endif %}
       <pre class="msg-body">{{ m.body or '' }}</pre>
@@ -137,24 +186,55 @@
   {% endfor %}
 </div>
 
-<h2>Attachments ({{ attachments|length }})</h2>
+<h2>Attachments <span class="muted">({{ attachments|length }})</span></h2>
 {% if attachments %}
-  <table class="data">
-    <thead><tr><th>Filename</th><th>Status</th><th>Size</th><th>Downloaded</th><th>Local path</th></tr></thead>
-    <tbody>
-      {% for a in attachments %}
-        <tr>
-          <td>{{ a.filename }}</td>
-          <td>{{ a.download_status }}</td>
-          <td>{{ a.file_size or '—' }}</td>
-          <td>{{ a.downloaded_at|fmt_dt }}</td>
-          <td class="muted small">{{ a.local_path or (a.error_message or '') }}</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% set failed = attachments|selectattr('download_status','equalto','failed')|list %}
+  {% if failed %}
+    <div class="banner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <span>{{ failed|length }} attachment(s) failed to download.</span>
+      <form method="post" action="{{ url_for('request_retry_downloads', request_id=r.request_id) }}" style="margin-left:auto">
+        <button class="btn btn-small" type="submit">Retry on next scrape</button>
+      </form>
+    </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>File</th><th>Status</th><th>Size</th><th>Downloaded</th><th></th></tr></thead>
+      <tbody>
+        {% for a in attachments %}
+          <tr>
+            <td>
+              {% if a.download_status == 'downloaded' %}
+                <a href="{{ url_for('attachment_file', attachment_id=a.attachment_id) }}" target="_blank" rel="noopener">{{ a.filename }}</a>
+              {% else %}{{ a.filename }}{% endif %}
+              {% if a._text %}
+                <details class="disclosure"><summary>View extracted text</summary><div class="body"><pre>{{ a._text[:20000] }}</pre></div></details>
+              {% endif %}
+            </td>
+            <td><span class="chip {{ 'open' if a.download_status=='downloaded' else ('sev-high' if a.download_status=='failed' else '') }}">{{ a.download_status }}</span></td>
+            <td class="tnum">{{ '%.0f KB'|format(a.file_size/1024) if a.file_size else '—' }}</td>
+            <td class="tnum">{{ a.downloaded_at|fmt_dt or '—' }}</td>
+            <td>{% if a.download_status == 'downloaded' %}<a class="btn btn-small" href="{{ url_for('attachment_file', attachment_id=a.attachment_id) }}" target="_blank" rel="noopener">Open</a>{% elif a.error_message %}<span class="muted small">{{ a.error_message[:60] }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {% else %}
   <p class="muted">No attachments.</p>
 {% endif %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* Disable AI-action buttons on submit so a slow API round-trip can't be double-fired. */
+document.querySelectorAll('form.ai-action').forEach(function (f) {
+  f.addEventListener('submit', function () {
+    var b = f.querySelector('button[type=submit]');
+    if (b) { b.disabled = true; b.textContent = 'Working…'; }
+  });
+});
+</script>
 {% endblock %}

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Overview</div>{% endblock %}
+{% block pagetitle %}Dashboard{% endblock %}
+{% block content %}
+
+<section class="kpis">
+  <a class="kpi hero" href="{{ url_for('index', status='all') }}"><div class="v tnum">{{ counts.total_requests }}</div><div class="l">Requests</div></a>
+  <a class="kpi hero tone-accent" href="{{ url_for('index', status='open') }}"><div class="v tnum">{{ counts.open_requests }}</div><div class="l">Open</div></a>
+  <div class="kpi hero"><div class="v tnum">{{ avg_h if avg_h is not none else '—' }}{% if avg_h is not none %}<span style="font-size:16px"> h</span>{% endif %}</div><div class="l">Avg time to first reply</div></div>
+  <div class="kpi"><div class="v tnum">{{ med_h if med_h is not none else '—' }}{% if med_h is not none %}<span style="font-size:16px"> h</span>{% endif %}</div><div class="l">Median ({{ sample }} samples)</div></div>
+  <a class="kpi tone-danger" href="{{ url_for('index', status='issues') }}"><div class="v tnum">{{ counts.compliance_issues_open }}</div><div class="l">Open compliance issues</div></a>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h3>Avg time to first reply, by department</h3>
+    {% if dept_rows %}
+      <div class="bars">
+        {% for d in dept_rows %}
+          <div class="bar-row">
+            <span class="lbl" title="{{ d.dept }}">{{ d.dept }}</span>
+            <div class="bar-track"><div class="bar-fill" style="width: {{ (d.avg / max_dept * 100)|round(1) }}%"></div></div>
+            <span class="val">{{ d.avg }} h<span class="muted small"> · {{ d.n }}</span></span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}<p class="muted small">Not enough reply-time data yet. Run a scrape and AI classification.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Overdue · open &gt; {{ overdue_days }} days, no real reply</h3>
+    {% if overdue %}
+      <ul class="stack" style="list-style:none;padding:0;margin:0">
+        {% for o in overdue[:12] %}
+          <li style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)">
+            <a class="req-id" href="{{ url_for('request_detail', request_id=o.request_id) }}">{{ o.request_id }}</a>
+            <span class="muted small">{{ o.department }}</span>
+            <span class="chip sev-high tnum">{{ o.days }} d</span>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if overdue|length > 12 %}<p class="muted small" style="margin-top:8px">+ {{ overdue|length - 12 }} more.</p>{% endif %}
+    {% else %}<p class="muted small">Nothing overdue. 🎉</p>{% endif %}
+  </div>
+</section>
+
+<div class="card">
+  <h3>Requests submitted by month</h3>
+  {% if month_rows %}
+    <div class="month-bars">
+      {% for m in month_rows %}
+        <div class="mb" title="{{ m.month }}: {{ m.n }}">
+          <div class="col" style="height: {{ (m.n / max_month * 100)|round(1) }}%"></div>
+          <span class="cap">{{ m.month }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}<p class="muted small">No submission dates recorded yet.</p>{% endif %}
+</div>
+
+{% endblock %}

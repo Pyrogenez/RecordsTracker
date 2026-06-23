@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Runs &amp; Sync — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Scrape &amp; analysis</div>{% endblock %}
+{% block pagetitle %}Runs &amp; Sync{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h3>Pull records from the portal</h3>
+  <p class="muted small" style="max-width:75ch">
+    A scrape opens a hidden browser and reads your portal. It paces itself with
+    long, human-like pauses to avoid tripping the city's automated-scraper alarms,
+    so a full scrape can take <strong>hours</strong> — that's intentional. Only one
+    scrape runs at a time.
+  </p>
+  <div class="actions-row" style="margin-top:10px">
+    <form method="post" action="{{ url_for('action_scrape') }}">
+      <input type="hidden" name="mode" value="incremental">
+      <button class="btn btn-primary" type="submit" {{ 'disabled' if scrape_running }}>Check for updates (incremental)</button>
+    </form>
+    <form method="post" action="{{ url_for('action_scrape') }}" onsubmit="return confirm('A full scrape re-checks every request and can take hours. Continue?')">
+      <input type="hidden" name="mode" value="full">
+      <button class="btn" type="submit" {{ 'disabled' if scrape_running }}>Full scrape</button>
+    </form>
+    {% if scrape_running %}<span class="chip open dot">scrape running…</span>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>AI analysis</h3>
+  <p class="muted small" style="max-width:75ch">
+    Extract text from attachments, classify messages, and generate per-request
+    summaries. Classification and summaries call the Anthropic API (your key) and
+    may cost money; results are cached so re-runs are cheap.
+  </p>
+  <div class="actions-row" style="margin-top:10px">
+    <form method="post" action="{{ url_for('action_analyze') }}">
+      <button class="btn btn-ai" type="submit" {{ 'disabled' if analyze_running or not ai_enabled }}>Run AI analysis on all</button>
+    </form>
+    {% if analyze_running %}<span class="chip open dot">analysis running…</span>{% endif %}
+    {% if not ai_enabled %}<span class="chip">add an API key in config.json to enable</span>{% endif %}
+  </div>
+</div>
+
+<section class="kpis">
+  <div class="kpi"><div class="v tnum">{{ coverage.messages_classified }}/{{ coverage.messages_total }}</div><div class="l">Messages classified</div></div>
+  <div class="kpi"><div class="v tnum">{{ coverage.attachments_with_text }}/{{ coverage.attachments_downloaded }}</div><div class="l">Attachments text-extracted</div></div>
+  <div class="kpi"><div class="v tnum">{{ coverage.requests_summarized }}/{{ coverage.requests_total }}</div><div class="l">Requests summarized</div></div>
+  {% if counts.failed_attachments %}<div class="kpi tone-danger"><div class="v tnum">{{ counts.failed_attachments }}</div><div class="l">Downloads permanently failed</div></div>{% endif %}
+</section>
+
+<h2>Recent runs</h2>
+{% if recent %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Mode</th><th>Started</th><th>Finished</th><th>Scraped</th><th>New req</th><th>New msg</th><th>New files</th><th>Result</th></tr></thead>
+      <tbody>
+        {% for run in recent %}
+          <tr>
+            <td><span class="chip">{{ run.mode or '?' }}</span></td>
+            <td class="tnum">{{ run.started_at|fmt_dt }}</td>
+            <td class="tnum">{{ run.finished_at|fmt_dt or '—' }}</td>
+            <td class="tnum">{{ run.requests_scraped }}{% if run.requests_skipped %} <span class="muted small">(+{{ run.requests_skipped }} skipped)</span>{% endif %}</td>
+            <td class="tnum">{{ run.new_requests }}</td>
+            <td class="tnum">{{ run.new_messages }}</td>
+            <td class="tnum">{{ run.new_attachments }}</td>
+            <td>{% if run.error %}<span class="chip sev-high">error</span>{% elif run.finished_at %}<span class="chip open">ok</span>{% else %}<span class="chip">running</span>{% endif %}</td>
+          </tr>
+          {% if run.error %}<tr><td colspan="8" class="muted small" style="color:var(--err)">{{ run.error }}</td></tr>{% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty-state"><div class="big">No runs yet</div><p>Use “Check for updates” above, or double-click <code>FullScrape.bat</code>.</p></div>
+{% endif %}
+{% endblock %}

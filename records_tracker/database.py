@@ -807,6 +807,12 @@ class Database:
         )
         self._conn.commit()
 
+    def open_compliance_count(self) -> int:
+        """Cheap count for the nav badge (avoids a full counts() per page)."""
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM compliance_issues WHERE status = 'open'"
+        ).fetchone()[0]
+
     def get_compliance_issues(self, request_id: str | None = None,
                               status: str | None = None) -> list[dict]:
         q = "SELECT * FROM compliance_issues WHERE 1=1"

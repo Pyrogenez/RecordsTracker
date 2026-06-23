@@ -1,35 +1,45 @@
 {% extends "base.html" %}
-{% block title %}Global analysis{% endblock %}
+{% block title %}AI Analysis — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Cross-record</div>{% endblock %}
+{% block pagetitle %}AI Analysis{% endblock %}
 {% block content %}
-
-<h1>Global analysis</h1>
-<p class="muted">
-  Cross-record conversations: ask Claude questions about patterns across
-  every tracked request. Conversations are saved here for later review.
+<p class="muted" style="max-width:70ch">
+  Ask Claude questions about patterns across <strong>every</strong> tracked request —
+  e.g. “which requests waited longest for a reply?” or “which mention body-cam footage?”
+  Conversations are saved here for later.
 </p>
 
-<form method="post" action="{{ url_for('conversation_new') }}" class="inline-form">
+{% if ai_enabled %}
+<form method="post" action="{{ url_for('conversation_new') }}" class="inline-form" style="margin:14px 0 22px">
   <input type="hidden" name="scope" value="global">
-  <input type="text" name="title" placeholder="New conversation title (optional)" style="flex:1">
+  <label class="sr-only" for="conv-title">New conversation title</label>
+  <input type="text" name="title" id="conv-title" placeholder="New conversation title (optional)" style="flex:1;max-width:420px">
   <button class="btn btn-primary" type="submit">Start new conversation</button>
 </form>
+{% else %}
+<div class="banner">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+  <span>AI features are off. Add an Anthropic API key to <code>config.json</code> to enable cross-record chat.</span>
+</div>
+{% endif %}
 
 <h2>Saved conversations</h2>
 {% if conversations %}
-  <ul class="conv-list">
-    {% for c in conversations %}
-      <li>
-        <a href="{{ url_for('conversation_view', conversation_id=c.conversation_id) }}">
-          <strong>{{ c.title }}</strong>
-        </a>
-        <div class="muted small">
-          created {{ c.created_at|fmt_dt }} · updated {{ c.updated_at|fmt_dt }}
-        </div>
-      </li>
-    {% endfor %}
-  </ul>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Title</th><th>Created</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for c in conversations %}
+          <tr>
+            <td><a class="req-id" href="{{ url_for('conversation_view', conversation_id=c.conversation_id) }}">{{ c.title }}</a></td>
+            <td class="tnum">{{ c.created_at|fmt_dt }}</td>
+            <td class="tnum">{{ c.updated_at|fmt_dt }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {% else %}
-  <p class="muted">No global conversations yet.</p>
+  <div class="empty-state"><div class="big">No conversations yet</div><p>Start one above to analyze across all your records.</p></div>
 {% endif %}
-
 {% endblock %}

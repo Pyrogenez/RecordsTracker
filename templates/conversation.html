@@ -1,49 +1,69 @@
 {% extends "base.html" %}
 {% block title %}{{ conv.title }} — Conversation{% endblock %}
-{% block content %}
-
-<p>
-  <a href="{{ url_for('global_analysis') if conv.scope == 'global' else url_for('request_detail', request_id=conv.request_id) }}">
-    ← back
-  </a>
-</p>
-
-<div class="header-flex">
-  <h1>{{ conv.title }}</h1>
+{% block eyebrow %}<div class="eyebrow">AI conversation · {{ conv.scope }}{% if conv.request_id %} · {{ conv.request_id }}{% endif %}</div>{% endblock %}
+{% block pagetitle %}{{ conv.title }}{% endblock %}
+{% block topactions %}
   <form method="post" action="{{ url_for('conversation_delete', conversation_id=conv.conversation_id) }}"
         onsubmit="return confirm('Delete this conversation?');">
     <button class="btn btn-danger" type="submit">Delete</button>
   </form>
-</div>
+{% endblock %}
 
-<p class="muted small">
-  Scope: {{ conv.scope }}{% if conv.request_id %} ({{ conv.request_id }}){% endif %}
-  · created {{ conv.created_at|fmt_dt }}
-  · last message {{ conv.updated_at|fmt_dt }}
-</p>
+{% block content %}
+<a class="back-link" href="{{ url_for('global_analysis') if conv.scope == 'global' else url_for('request_detail', request_id=conv.request_id) }}">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> Back
+</a>
+
+<details class="disclosure" style="max-width:520px">
+  <summary>Rename conversation</summary>
+  <div class="body">
+    <form method="post" action="{{ url_for('conversation_rename', conversation_id=conv.conversation_id) }}" class="inline-form">
+      <label class="sr-only" for="rename">New title</label>
+      <input type="text" name="title" id="rename" value="{{ conv.title }}" style="flex:1">
+      <button class="btn btn-small" type="submit">Rename</button>
+    </form>
+  </div>
+</details>
 
 <div class="chat">
   {% for m in messages %}
     <div class="turn turn-{{ m.role }}">
       <div class="turn-head">
-        <strong>{{ m.role }}</strong>
-        {% if m.model %}<span class="muted small">{{ m.model }}</span>{% endif %}
-        <span class="muted small">{{ m.created_at|fmt_dt }}</span>
+        <span class="role">{{ m.role }}</span>
+        {% if m.model %}<span class="muted">{{ m.model }}</span>{% endif %}
+        <span class="muted tnum">{{ m.created_at|fmt_dt }}</span>
       </div>
-      <div class="turn-body">{{ m.content }}</div>
+      {% if m.role == 'assistant' and not (m.content|looks_like_json) %}
+        <div class="turn-body md-body">{{ m.content|md|safe }}</div>
+      {% elif m.content|looks_like_json %}
+        <details class="disclosure"><summary>Audit result (JSON)</summary><div class="body"><pre>{{ m.content }}</pre></div></details>
+      {% else %}
+        <div class="turn-body">{{ m.content }}</div>
+      {% endif %}
     </div>
   {% endfor %}
   {% if not messages %}
-    <p class="muted">No messages yet — send the first one below.</p>
+    <div class="empty-state"><div class="big">No messages yet</div><p>Send the first one below.</p></div>
   {% endif %}
+  <div id="chat-end"></div>
 </div>
 
-<form method="post" action="{{ url_for('conversation_send', conversation_id=conv.conversation_id) }}"
-      class="chat-input">
-  <textarea name="message" rows="4"
-            placeholder="Ask a question about this record, its messages, attachments, or Chapter 119 compliance…"
-            required></textarea>
+<form method="post" action="{{ url_for('conversation_send', conversation_id=conv.conversation_id) }}" class="chat-input ai-action">
+  <label class="sr-only" for="chat-msg">Your message</label>
+  <textarea name="message" id="chat-msg" rows="3"
+    placeholder="Ask about this record's messages, attachments, timeline, or Chapter 119 compliance…" required></textarea>
   <button class="btn btn-primary" type="submit">Send</button>
 </form>
+{% endblock %}
 
+{% block scripts %}
+<script>
+  var end = document.getElementById('chat-end');
+  if (end) end.scrollIntoView({ block: 'end' });
+  var f = document.querySelector('form.ai-action');
+  if (f) f.addEventListener('submit', function () {
+    var b = f.querySelector('button[type=submit]');
+    if (b) { b.disabled = true; b.textContent = 'Thinking…'; }
+  });
+</script>
 {% endblock %}
