@@ -29,6 +29,12 @@ DEFAULT_CONFIG = {
     "polite_delay_seconds": 1.5,
     "download_attachments": True,
     "skip_already_downloaded": True,
+    "update_check": {
+        "enabled": True,
+        "owner": "Pyrogenez",
+        "repo": "RecordsTracker",
+        "branch": "main",
+    },
     "_models_comment": (
         "Optional. Override the AI model used per task to tune cost vs. quality, "
         "e.g. add  \"models\": {\"summarize\": \"claude-haiku-4-5-20251001\"}  to "

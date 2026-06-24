@@ -88,8 +88,10 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 
 ```
 <install folder>/
-├── Install.bat, Start.bat, Scrape.bat, FullScrape.bat, Update.bat   (Windows)
-├── Install.command, Start.command, … , Update.command              (macOS)
+├── Install.bat, Start.bat, Scrape.bat, FullScrape.bat, Update.bat,  (Windows)
+│   Backup.bat, Restore.bat, CheckUpdate.bat
+├── Install.command, … , Update.command, Backup.command,            (macOS)
+│   Restore.command, CheckUpdate.command
 ├── setup_wizard.py            first-run config wizard
 ├── VERSION.txt                current installed version
 ├── README.txt                 plain-English user-facing docs
@@ -99,6 +101,8 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 ├── server.py                  Flask web UI entry point
 ├── analyze.py                 AI batch commands
 ├── apply_update.py            stdlib-only update applier (used by Update.bat)
+├── selfupdate.py              check GitHub + download/apply an update
+├── restore_data.py            list/restore database backups (Restore launchers)
 ├── cleanup_bad_rows.py        dev utility for removing empty DB rows
 ├── requirements.txt
 │
@@ -109,6 +113,8 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 │   ├── ai.py                  Anthropic client wrapper (chat + audit)
 │   ├── chapter119.py          Florida PR law knowledge base
 │   ├── mdlite.py              safe Markdown-subset renderer for AI output
+│   ├── backup.py              consistent DB snapshots + restore
+│   ├── updater.py             GitHub version check + download
 │   └── config.py              load credentials.json + config.json
 │
 ├── templates/                 Jinja2 templates for the Flask UI
@@ -124,8 +130,12 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 │   ├── records.db             SQLite database, the source of truth
 │   ├── records.db-wal/-shm    WAL sidecar files (auto-managed; leave them)
 │   ├── .secret_key            random Flask session key (auto-created)
+│   ├── .update_check.json     cached "is a newer version available?" result
 │   ├── records_analysis.xlsx  Excel snapshot, rewritten every scrape
 │   └── downloads/<REQ_ID>/    one folder per request with attachments
+│
+├── backups/<ts>__<reason>/    automatic + manual DB snapshots (never shipped;
+│                              one is made before every update)
 │
 └── logs/YYYY-MM-DD.log        one scraper log per day
 ```
@@ -226,8 +236,30 @@ Full schema is in `records_tracker/database.py` under `SCHEMA = """..."""`.
 - **The scraper is read-only** by design. It never clicks Submit,
   never accepts terms, never sends messages, never changes passwords.
   Only reads + triggers attachment downloads.
-- **`data/`, `logs/`, `credentials.json`, and `config.json` are NEVER
-  touched by `Update.bat`.** The update zip only contains code.
+- **`data/`, `logs/`, `backups/`, `credentials.json`, and `config.json` are
+  NEVER touched by an update.** Updates replace code only; `apply_update.py`
+  skips those names when copying, and its `removed_files.txt` manifest is
+  guarded so it can never delete them. DB schema changes ship as idempotent
+  additive `ALTER` migrations (see `_MIGRATIONS`) — never destructive — so the
+  user's core data is preserved and just carried forward.
+- **Automatic update notifications + self-update.** When the author pushes a
+  newer `VERSION.txt` to the GitHub repo (config: `update_check` in
+  `config.json`, default `Pyrogenez/RecordsTracker`@`main`), each install sees
+  it (cached, ~6h, never blocks a page; `records_tracker/updater.py`) and the
+  web UI shows an "Update now" banner. "Update now" downloads the branch source
+  archive (`selfupdate.py apply` → `apply_update.py`) and applies it. For this
+  to reach a user, the repo (or its raw `VERSION.txt` + branch archive) must be
+  **public**; on a private/offline repo the check degrades silently to "no
+  update". Note the web "Update now" path does NOT refresh pip packages — if
+  `requirements.txt` changed, run `Update.bat`/`Update.command` (which does).
+- **Automatic database backups + restore.** Before every update,
+  `apply_update.py` snapshots `data/records.db` to `backups/<ts>__pre-update/`
+  using SQLite's online-backup API (consistent + integrity-checked). Users can
+  also "Back up now" from the Runs page (or `Backup.bat`/`.command`), and revert
+  with `Restore.bat`/`.command` (`restore_data.py`), which snapshots the current
+  DB first so a restore is itself reversible. Kept to the 10 most recent.
+  Downloaded attachment files are NOT in backups (large, never modified, and
+  re-downloadable).
 
 ## Configuration files
 
@@ -290,8 +322,16 @@ environment variable; `config.json` wins if both are set.
   Look at the most recent log in `logs/`.
 - **"My Excel file is corrupted"** — close Excel, delete
   `data/records_analysis.xlsx`, run a scrape; it'll be regenerated.
-- **"How do I update?"** — save the `update-X.Y.Z.zip` file you were
-  sent into the install folder, then double-click `Update.bat`.
+- **"How do I update?"** — easiest: click **Update now** on the web UI's
+  update banner (or "Check for updates" on the Runs page); it backs up your
+  data and pulls the latest from GitHub. CLI: `python selfupdate.py apply`, or
+  `CheckUpdate.bat`/`.command`. Manual zip method still works: drop an
+  `update-X.Y.Z.zip` in the folder and run `Update.bat`/`.command`. All paths
+  snapshot the database first and never touch your data/login/settings.
+- **"How do I back up or restore my data?"** — "Back up now" on the Runs page
+  or `Backup.bat`/`.command`. To revert, close the program and run
+  `Restore.bat`/`.command` (pick a backup; your current data is saved first).
+  Backups live in the `backups/` folder.
 - **"How much does the AI cost me?"** — only the AI features
   (`analyze.py` commands, compliance audits, chat in the web UI) use
   the Anthropic API. The scraper itself makes zero API calls.

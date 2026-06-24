@@ -123,14 +123,33 @@ folder for 4 short steps to get set up. Highly recommended.
 
 Getting updates
 ---------------
-If you receive a new version as a file named something like
-"update-1.1.0.zip":
+The program checks for new versions automatically. When one is available,
+the web interface shows an "Update now" banner at the top of every page -
+just click it. (You can also use "Check for updates" on the Runs & Sync
+page, or double-click "CheckUpdate.bat" / "CheckUpdate.command".)
 
-  1. Save the zip file into THIS folder (the same folder as Update.bat).
-  2. Double-click "Update.bat".
+Updating only changes the PROGRAM. Your database, downloaded files, login,
+and settings are always preserved - and a backup of your database is taken
+automatically right before every update, just in case.
 
-The update only changes the program. Your database, downloads, login,
-and settings are preserved.
+If someone instead sends you a file named like "update-1.4.0.zip", you can
+still apply it the manual way: save it into THIS folder and double-click
+"Update.bat" / "Update.command".
+
+
+Backing up and restoring your data
+----------------------------------
+Your data (all your requests, messages, and notes) lives in a database that
+is never touched by an update. On top of that:
+
+  - A backup is saved automatically before every update.
+  - You can save one anytime: "Back up now" on the Runs & Sync page, or
+    double-click "Backup.bat" / "Backup.command".
+  - To go back to an earlier backup: close the program first, then
+    double-click "Restore.bat" / "Restore.command", and pick the backup to
+    restore. Your current data is saved first, so a restore can be undone.
+
+Backups are kept in the "backups" folder (the most recent 10).
 
 
 Troubleshooting
@@ -146,6 +165,13 @@ Troubleshooting
 "Could not locate login fields"
   The portal's web page probably changed. Message the person who sent
   you this program - they can ship an update.
+
+"The program won't open after an update"
+  Rare, but if a new version needed a new package: double-click
+  "Update.bat" / "Update.command" (it's safe to re-run) to finish
+  installing what it needs. Your data is untouched. If it still won't
+  open, run "Restore.bat" / "Restore.command" and pick the backup named
+  "pre-update" from just before the update.
 
 Something else is broken
   Look at the most recent log in the logs\ folder and send it to the

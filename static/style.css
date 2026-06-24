@@ -408,6 +408,12 @@ dl.kv dd { margin: 0; font-weight: 500; }
 .flash { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-radius: 10px; font-weight: 600; font-size: 13.5px;
   box-shadow: var(--shadow-sm); border: 1px solid; }
 .flash svg { width: 18px; height: 18px; flex: none; }
+.update-banner { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); font-weight: 600; font-size: 13.5px;
+  box-shadow: var(--shadow-sm); }
+.update-banner svg { width: 18px; height: 18px; flex: none; }
+.update-banner form { margin-left: auto; }
 .flash-ok { background: var(--ok-bg); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .flash-warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .flash-err { background: var(--err-bg); color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }

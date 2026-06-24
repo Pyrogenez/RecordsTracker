@@ -13,7 +13,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
+import json
 import logging
+import os
 import secrets
 import statistics
 import subprocess
@@ -31,6 +34,8 @@ from flask import (
 )
 
 from records_tracker import ai as ai_mod
+from records_tracker import backup as backup_mod
+from records_tracker import updater
 from records_tracker.config import PROJECT_ROOT, project_paths
 from records_tracker.database import Database, is_support_sender, request_label
 from records_tracker.mdlite import looks_like_json, markdown_to_html
@@ -99,19 +104,22 @@ def _action_running(name: str) -> bool:
         return proc is not None and proc.poll() is None
 
 
-def _start_action(name: str, argv: list[str]) -> tuple[bool, str]:
+def _start_action(name: str, argv: list[str],
+                  log_path: str | None = None) -> tuple[bool, str]:
     """Start a background subprocess for `name` unless one is already running.
-    Returns (started, message)."""
+    Returns (started, message). If log_path is given, the child's output goes
+    there (so failures are diagnosable instead of swallowed)."""
     with _ACTIONS_LOCK:
         existing = _ACTIONS.get(name)
         if existing is not None and existing.poll() is None:
             return False, f"A {name} is already running. Let it finish first."
         try:
+            out = open(log_path, "w", encoding="utf-8") if log_path else subprocess.DEVNULL
             proc = subprocess.Popen(  # noqa: S603
                 [sys.executable, *argv],
                 cwd=str(PROJECT_ROOT),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
             )
         except Exception as e:  # noqa: BLE001
             return False, f"Could not start {name}: {e}"
@@ -137,6 +145,10 @@ def create_app() -> Flask:
 
     # Apply schema + migrations ONCE at startup rather than on every request.
     Database(app.config["DB_PATH"], ensure_schema=True).close()
+
+    # Refresh the "is there a newer version?" cache in the background so it never
+    # slows a page load. Best-effort; silently does nothing if offline/private.
+    threading.Thread(target=lambda: updater.check(force=False), daemon=True).start()
 
     # ----- DB per-request (schema already ensured at startup) -----
     def get_db() -> Database:
@@ -227,8 +239,10 @@ def create_app() -> Flask:
             "active_endpoint": request.endpoint,
             "scrape_running": _action_running("scrape"),
             "analyze_running": _action_running("analysis"),
+            "update_running": _action_running("update"),
             "open_issue_count": open_issues,
             "app_version": app.config.get("APP_VERSION", "?"),
+            "update_info": updater.cached(),  # cache only — never a network call here
         }
 
     # ===== routes =====
@@ -665,11 +679,21 @@ def create_app() -> Flask:
             "requests_total": counts["total_requests"],
             "requests_summarized": counts["summarized_requests"],
         }
+        update_result = None
+        try:
+            update_result = json.loads(
+                (project_paths()["data"] / ".update_result.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
         return render_template("runs.html", recent=recent, coverage=coverage,
-                               counts=counts, has_baseline=db.has_baseline_run())
+                               counts=counts, has_baseline=db.has_baseline_run(),
+                               backups=backup_mod.list_backups(), update_result=update_result)
 
     @app.route("/actions/scrape", methods=["POST"])
     def action_scrape():
+        if _action_running("update"):
+            flash("An update is in progress — wait for it to finish.", "warn")
+            return redirect(url_for("runs"))
         mode = request.form.get("mode") or "incremental"
         argv = ["run.py"] + (["--full"] if mode == "full" else [])
         ok, msg = _start_action("scrape", argv)
@@ -678,10 +702,75 @@ def create_app() -> Flask:
 
     @app.route("/actions/analyze", methods=["POST"])
     def action_analyze():
+        if _action_running("update"):
+            flash("An update is in progress — wait for it to finish.", "warn")
+            return redirect(url_for("runs"))
         if not ai_mod.get_api_key():
             flash("Add an Anthropic API key (in config.json) to run AI analysis.", "err")
             return redirect(url_for("runs"))
         ok, msg = _start_action("analysis", ["analyze.py", "all", "--yes"])
+        flash(msg, "ok" if ok else "warn")
+        return redirect(url_for("runs"))
+
+    @app.route("/actions/backup", methods=["POST"])
+    def action_backup():
+        try:
+            meta = backup_mod.make_db_backup(reason="manual")
+            if meta is None:
+                flash("Nothing to back up yet — no database. Pull records first.", "warn")
+            else:
+                flash(f"Backup saved ({meta['db_bytes'] // 1024} KB). "
+                      "Your data is now safely snapshotted.", "ok")
+        except Exception as e:  # noqa: BLE001
+            log.exception("manual backup failed")
+            flash(f"Backup failed: {e}", "err")
+        return redirect(url_for("runs"))
+
+    @app.route("/actions/check-update", methods=["POST"])
+    def action_check_update():
+        info = updater.check(force=True)
+        if not info.get("enabled"):
+            flash("Update checking is turned off in config.json.", "warn")
+        elif info.get("latest") is None:
+            flash("Couldn't reach GitHub to check for updates (you may be offline, "
+                  "or the repository is private).", "warn")
+        elif info.get("available"):
+            flash(f"Update available: v{info['current']} → v{info['latest']}.", "ok")
+        else:
+            flash(f"You're up to date (v{info['current']}).", "ok")
+        return redirect(url_for("runs"))
+
+    @app.route("/actions/update", methods=["POST"])
+    def action_update():
+        if _action_running("scrape") or _action_running("analysis"):
+            flash("Wait for the running scrape/analysis to finish before updating.", "warn")
+            return redirect(url_for("runs"))
+        paths = project_paths()
+        paths["logs"].mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = paths["logs"] / f"update-{ts}.log"
+        result_path = paths["data"] / ".update_result.json"
+        try:
+            result_path.unlink()  # clear any prior result so the page reflects this run
+        except OSError:
+            pass
+        # Snapshots your data, downloads the latest from GitHub, applies code only.
+        ok, msg = _start_action("update", ["selfupdate.py", "apply"], log_path=str(log_path))
+        if ok:
+            proc = _ACTIONS.get("update")
+
+            def _watch(p, lp, rp):
+                rc = p.wait()
+                try:
+                    rp.write_text(json.dumps({
+                        "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "returncode": rc, "log": lp.name}), encoding="utf-8")
+                except OSError:
+                    pass
+            threading.Thread(target=_watch, args=(proc, log_path, result_path),
+                             daemon=True).start()
+            msg = ("Updating in the background — your data is backed up first. When it "
+                   "finishes, close this window, reopen with Start, then refresh.")
         flash(msg, "ok" if ok else "warn")
         return redirect(url_for("runs"))
 
@@ -709,6 +798,16 @@ def main() -> int:
     app = create_app()
     url = f"http://{args.host}:{args.port}/"
     log.info("Starting web UI at %s", url)
+    # Record the port/pid so a restore (a separate process) can detect that the
+    # server is live and refuse to overwrite the database out from under it.
+    try:
+        paths = project_paths()
+        paths["data"].mkdir(parents=True, exist_ok=True)
+        lock = paths["data"] / ".server.lock"
+        lock.write_text(json.dumps({"port": args.port, "pid": os.getpid()}), encoding="utf-8")
+        atexit.register(lambda: lock.unlink(missing_ok=True))
+    except OSError:
+        pass
     if args.open:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:

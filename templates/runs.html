@@ -22,11 +22,11 @@
   <div class="actions-row" style="margin-top:10px">
     <form method="post" action="{{ url_for('action_scrape') }}">
       <input type="hidden" name="mode" value="incremental">
-      <button class="btn btn-primary" type="submit" {{ 'disabled' if scrape_running }}>Check for updates</button>
+      <button class="btn btn-primary" type="submit" {{ 'disabled' if scrape_running or update_running }}>Check for updates</button>
     </form>
     <form method="post" action="{{ url_for('action_scrape') }}" onsubmit="return confirm('A full scrape re-checks every request and can take hours. Continue?')">
       <input type="hidden" name="mode" value="full">
-      <button class="btn" type="submit" {{ 'disabled' if scrape_running }}>Full scrape</button>
+      <button class="btn" type="submit" {{ 'disabled' if scrape_running or update_running }}>Full scrape</button>
     </form>
     {% if scrape_running %}<span class="chip open dot">scrape running…</span>{% endif %}
   </div>
@@ -43,12 +43,82 @@
   </p>
   <div class="actions-row" style="margin-top:10px">
     <form method="post" action="{{ url_for('action_analyze') }}">
-      <button class="btn btn-ai" type="submit" {{ 'disabled' if analyze_running or not ai_enabled or not counts.total_requests }}>Run AI analysis on all</button>
+      <button class="btn btn-ai" type="submit" {{ 'disabled' if analyze_running or update_running or not ai_enabled or not counts.total_requests }}>Run AI analysis on all</button>
     </form>
     {% if analyze_running %}<span class="chip open dot">analysis running…</span>{% endif %}
     {% if not ai_enabled %}<span class="chip">add an API key in config.json to enable</span>
     {% elif not counts.total_requests %}<span class="chip">pull records first — nothing to analyze yet</span>{% endif %}
   </div>
+</div>
+
+<div class="card">
+  <h3>App updates</h3>
+  <p class="muted small" style="max-width:78ch">
+    You're running <strong>v{{ app_version }}</strong>.
+    {% if not update_info.enabled %}Automatic checking is off in config.json.
+    {% elif update_info.latest is none %}Couldn't reach GitHub to check (you may be offline, or the repository is private).
+    {% elif update_info.available %}<span style="color:var(--accent-ink);font-weight:600">Version {{ update_info.latest }} is available.</span>
+    {% else %}You're up to date.{% endif %}
+    Updating replaces <strong>only the program code</strong> — your records, downloaded files,
+    login, and settings are kept, and a snapshot of your database is taken automatically first.
+  </p>
+  <div class="actions-row" style="margin-top:10px">
+    <form method="post" action="{{ url_for('action_check_update') }}">
+      <button class="btn" type="submit">Check for updates</button>
+    </form>
+    {% if update_info.available and not update_running %}
+    <form method="post" action="{{ url_for('action_update') }}">
+      <button class="btn btn-primary" type="submit">Update now to v{{ update_info.latest }}</button>
+    </form>
+    {% endif %}
+    {% if update_running %}<span class="chip open dot">updating…</span>{% endif %}
+  </div>
+  {% if update_result and not update_running %}
+    <p class="muted small" style="margin-top:10px">
+      {% if update_result.returncode == 0 %}
+        ✓ Last update finished successfully — close the program and reopen with Start to use it.
+      {% else %}
+        ⚠ The last update didn't finish (code {{ update_result.returncode }}). Your data is safe and
+        unchanged; details are in <code>logs/{{ update_result.log }}</code>. You can also run
+        <code>Update.bat</code> / <code>Update.command</code> (safe to re-run).
+      {% endif %}
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Data backups</h3>
+  <p class="muted small" style="max-width:78ch">
+    A snapshot of your database is saved automatically <strong>before every update</strong>, and you can
+    save one anytime. Backups live in the <code>backups</code> folder. To roll back, close the program and
+    run <code>Restore.bat</code> (Windows) / <code>Restore.command</code> (Mac) — it lists your backups and
+    restores the one you pick (saving your current data first, so it's reversible). Downloaded attachment
+    files aren't copied here — they're large and are never changed by an update.
+  </p>
+  <div class="actions-row" style="margin:10px 0">
+    <form method="post" action="{{ url_for('action_backup') }}">
+      <button class="btn btn-primary" type="submit">Back up now</button>
+    </form>
+  </div>
+  {% if backups %}
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>When</th><th>Reason</th><th>Version</th><th>Size</th><th>Healthy?</th></tr></thead>
+      <tbody>
+        {% for b in backups %}
+        <tr>
+          <td class="tnum">{{ b.timestamp[0:4] }}-{{ b.timestamp[4:6] }}-{{ b.timestamp[6:8] }} {{ b.timestamp[9:11] }}:{{ b.timestamp[11:13] }}</td>
+          <td>{{ b.reason }}</td>
+          <td class="tnum">v{{ b.version }}</td>
+          <td class="tnum">{{ (b.db_bytes or 0) // 1024 }} KB</td>
+          <td>{% if b.integrity == 'ok' %}<span class="chip open">ok</span>{% else %}<span class="chip sev-high">{{ b.integrity }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="muted small" style="margin-top:6px">Keeping the {{ backups|length }} most recent backup(s); older ones are pruned automatically.</p>
+  {% else %}
+    <p class="muted small">No backups yet. Click “Back up now”, or one is created automatically before your next update.</p>
+  {% endif %}
 </div>
 
 <section class="kpis">
@@ -86,10 +156,10 @@
 {% endblock %}
 
 {% block scripts %}
-{% if scrape_running or analyze_running %}
+{% if scrape_running or analyze_running or update_running %}
 <script>
   /* A job is running in a detached subprocess; refresh just this page so its
-     status/history update. The scrape itself is unaffected by the reload. */
+     status/history update. The job itself is unaffected by the reload. */
   setTimeout(function () { location.reload(); }, 15000);
 </script>
 {% endif %}
