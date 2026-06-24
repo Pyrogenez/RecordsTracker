@@ -4,8 +4,15 @@
 {% block pagetitle %}Runs &amp; Sync{% endblock %}
 {% block content %}
 
+<p class="muted" style="max-width:80ch;margin-bottom:14px">
+  How this works: <strong>1.</strong> pull your requests from the portal, then
+  <strong>2.</strong> run AI analysis on what you pulled. Analysis only works on
+  records you've already pulled.
+  {% if not has_baseline %}<br><strong>First time?</strong> Run a <em>Full scrape</em> once below to pull everything you have.{% endif %}
+</p>
+
 <div class="card">
-  <h3>Pull records from the portal</h3>
+  <h3>1. Pull records from the portal</h3>
   <p class="muted small" style="max-width:75ch">
     A scrape opens a hidden browser and reads your portal. It paces itself with
     long, human-like pauses to avoid tripping the city's automated-scraper alarms,
@@ -15,7 +22,7 @@
   <div class="actions-row" style="margin-top:10px">
     <form method="post" action="{{ url_for('action_scrape') }}">
       <input type="hidden" name="mode" value="incremental">
-      <button class="btn btn-primary" type="submit" {{ 'disabled' if scrape_running }}>Check for updates (incremental)</button>
+      <button class="btn btn-primary" type="submit" {{ 'disabled' if scrape_running }}>Check for updates</button>
     </form>
     <form method="post" action="{{ url_for('action_scrape') }}" onsubmit="return confirm('A full scrape re-checks every request and can take hours. Continue?')">
       <input type="hidden" name="mode" value="full">
@@ -26,18 +33,21 @@
 </div>
 
 <div class="card">
-  <h3>AI analysis</h3>
+  <h3>2. AI analysis</h3>
   <p class="muted small" style="max-width:75ch">
     Extract text from attachments, classify messages, and generate per-request
     summaries. Classification and summaries call the Anthropic API (your key) and
-    may cost money; results are cached so re-runs are cheap.
+    may cost money; results are saved so re-runs only process what's new (cheap).
+    Uses inexpensive Haiku for classification and reuses a cached legal reference
+    to keep costs low.
   </p>
   <div class="actions-row" style="margin-top:10px">
     <form method="post" action="{{ url_for('action_analyze') }}">
-      <button class="btn btn-ai" type="submit" {{ 'disabled' if analyze_running or not ai_enabled }}>Run AI analysis on all</button>
+      <button class="btn btn-ai" type="submit" {{ 'disabled' if analyze_running or not ai_enabled or not counts.total_requests }}>Run AI analysis on all</button>
     </form>
     {% if analyze_running %}<span class="chip open dot">analysis running…</span>{% endif %}
-    {% if not ai_enabled %}<span class="chip">add an API key in config.json to enable</span>{% endif %}
+    {% if not ai_enabled %}<span class="chip">add an API key in config.json to enable</span>
+    {% elif not counts.total_requests %}<span class="chip">pull records first — nothing to analyze yet</span>{% endif %}
   </div>
 </div>
 
@@ -56,7 +66,7 @@
       <tbody>
         {% for run in recent %}
           <tr>
-            <td><span class="chip">{{ run.mode or '?' }}</span></td>
+            <td><span class="chip">{{ run.mode|mode_label }}</span></td>
             <td class="tnum">{{ run.started_at|fmt_dt }}</td>
             <td class="tnum">{{ run.finished_at|fmt_dt or '—' }}</td>
             <td class="tnum">{{ run.requests_scraped }}{% if run.requests_skipped %} <span class="muted small">(+{{ run.requests_skipped }} skipped)</span>{% endif %}</td>
@@ -71,6 +81,16 @@
     </table>
   </div>
 {% else %}
-  <div class="empty-state"><div class="big">No runs yet</div><p>Use “Check for updates” above, or double-click <code>FullScrape.bat</code>.</p></div>
+  <div class="empty-state"><div class="big">No runs yet</div><p>Use “Check for updates” above, or double-click <code>FullScrape.bat</code> / <code>FullScrape.command</code>.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if scrape_running or analyze_running %}
+<script>
+  /* A job is running in a detached subprocess; refresh just this page so its
+     status/history update. The scrape itself is unaffected by the reload. */
+  setTimeout(function () { location.reload(); }, 15000);
+</script>
 {% endif %}
 {% endblock %}

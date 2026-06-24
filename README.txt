@@ -27,7 +27,11 @@ First time setup
 1. Unzip this folder somewhere permanent, like your Documents folder.
    (Do NOT keep it in Downloads - pick a real home for it.)
 
-2. Double-click "Install.bat".
+2. Double-click "Install.bat" (Windows) or "Install.command" (Mac).
+
+   On a Mac, if a .command file won't open the first time, right-click it and
+   choose "Open" (one-time macOS security prompt), or open Terminal in this
+   folder and run:  chmod +x *.command
 
    It will:
      - Check that Python is installed on your computer. If not, it
@@ -49,6 +53,9 @@ First time setup
 
 Day-to-day use
 --------------
+(On a Mac, use the matching ".command" files instead of ".bat" everywhere
+below — Start.command, Scrape.command, FullScrape.command, Update.command.)
+
 Double-click "Start.bat"
   Opens the web interface in your browser. This is the main way to
   use the program. Keep the black command window open while you're
@@ -58,6 +65,10 @@ Double-click "Start.bat"
     - See a Dashboard: how fast the city replies, which requests are
       overdue, and how many you file each month.
     - Browse, search, sort, and filter all your requests.
+    - Give any request a short NICKNAME so you recognize it instead of
+      its code (e.g. "4th St rezoning emails").
+    - Log a compliance issue right on a request's own page (no need to
+      pick the request from a list of codes).
     - Open any request to read every message, OPEN/download the files
       the city sent, see an AI summary, and chat with Claude about it.
     - Run a Florida Chapter 119 compliance audit and review (or print)

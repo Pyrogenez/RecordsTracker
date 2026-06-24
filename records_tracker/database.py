@@ -16,6 +16,30 @@ log = logging.getLogger(__name__)
 DEFAULT_MAX_DOWNLOAD_ATTEMPTS = 5
 
 
+def request_label(r: dict | None, maxlen: int = 55) -> str:
+    """A human-readable one-line label for a request, used everywhere a request
+    is shown or picked (dropdowns, headings, AI context) so the user isn't faced
+    with bare opaque IDs like 'P121302-042026'. Prefers a user-set short_title,
+    then falls back to department + a whitespace-collapsed description snippet.
+    Always begins with the request_id (the cross-reference key)."""
+    if not r:
+        return ""
+    rid = r.get("request_id") or "?"
+    title = (r.get("short_title") or "").strip()
+    if title:
+        return f"{rid} · {title}"
+    dept = (r.get("department") or "").strip()
+    desc = " ".join((r.get("description") or "").split())
+    parts = [rid]
+    if dept:
+        parts.append(dept)
+    if desc:
+        if len(desc) > maxlen:
+            desc = desc[:maxlen].rsplit(" ", 1)[0].rstrip() + "…"
+        parts.append(desc)
+    return " · ".join(parts)
+
+
 def is_support_sender(sender: str | None) -> bool:
     """True if a message sender is the city's records-support account.
 
@@ -31,6 +55,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     request_id          TEXT PRIMARY KEY,
     rid                 INTEGER NOT NULL UNIQUE,
+    short_title         TEXT,
     status              TEXT,
     final_state         TEXT,
     request_type        TEXT,
@@ -177,6 +202,7 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE runs ADD COLUMN mode TEXT",
     "ALTER TABLE runs ADD COLUMN requests_skipped INTEGER DEFAULT 0",
     "ALTER TABLE attachments ADD COLUMN download_attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE requests ADD COLUMN short_title TEXT",
 ]
 
 
@@ -417,6 +443,14 @@ class Database:
             "SELECT * FROM requests WHERE request_id = ?", (request_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    def set_short_title(self, request_id: str, title: str | None) -> None:
+        """Set/clear a user nickname for a request (used in labels everywhere)."""
+        self._conn.execute(
+            "UPDATE requests SET short_title = ? WHERE request_id = ?",
+            ((title or "").strip() or None, request_id),
+        )
+        self._conn.commit()
 
     def get_attachments_for_request(self, request_id: str) -> list[dict]:
         rows = self._conn.execute(

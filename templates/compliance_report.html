@@ -19,7 +19,7 @@
 {% if by_request %}
   {% for rid, rows in by_request.items() %}
     <div class="card">
-      <h2 style="margin-top:0">{{ rid }}</h2>
+      <h2 style="margin-top:0">{{ (reqs[rid]|request_label) if reqs.get(rid) else rid }}</h2>
       {% if reqs[rid] %}
         <dl class="kv">
           <dt>Department</dt><dd>{{ reqs[rid].department or '—' }}</dd>
@@ -40,8 +40,8 @@
               <span class="issue-type">{{ iss.issue_type }}</span>
               <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
               {% if iss.statute_section %}<span class="chip">§ {{ iss.statute_section }}</span>{% endif %}
-              {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
-              <span class="chip">{{ iss.status }}</span>
+              {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% AI confidence</span>{% endif %}
+              <span class="chip status-{{ iss.status }}">{{ iss.status }}</span>
             </div>
             <div style="margin:6px 0">{{ iss.description }}</div>
             {% if iss.evidence %}<div class="muted small">Evidence: {{ iss.evidence }}</div>{% endif %}

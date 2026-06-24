@@ -1,0 +1,7 @@
+# Keep the macOS/Unix launchers LF so they run (CRLF breaks the shebang/`\r`).
+*.command text eol=lf
+*.sh      text eol=lf
+# Windows batch files need CRLF.
+*.bat     text eol=crlf
+# Vendored fonts are binary — never line-ending munged.
+*.woff2   binary

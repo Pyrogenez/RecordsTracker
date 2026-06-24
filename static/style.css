@@ -274,6 +274,10 @@ code, .mono { font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
 .chip.brand { background: color-mix(in srgb, var(--brand) 14%, var(--surface)); color: var(--brand-ink); border-color: transparent; }
 .chip.closed { background: var(--surface-3); color: var(--muted); }
 .chip.open { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent-ink); border-color: transparent; }
+/* compliance issue status — colored consistently across all three issue lists */
+.chip.status-open { background: var(--sev-med-bg); color: var(--sev-med); border-color: transparent; }
+.chip.status-resolved { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.chip.status-dismissed { background: var(--surface-3); color: var(--muted); }
 .chip.sev-high { background: var(--sev-high-bg); color: var(--sev-high); border-color: transparent; }
 .chip.sev-med  { background: var(--sev-med-bg);  color: var(--sev-med); border-color: transparent; }
 .chip.sev-low  { background: var(--sev-low-bg);  color: var(--sev-low); border-color: transparent; }

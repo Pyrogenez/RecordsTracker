@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ r.request_id }} — St. Pete Records Tracker{% endblock %}
-{% block eyebrow %}<div class="eyebrow">Request</div>{% endblock %}
-{% block pagetitle %}{{ r.request_id }}{% if is_closed %} <span class="chip closed">closed</span>{% endif %}{% endblock %}
+{% block title %}{{ r.short_title or r.request_id }} — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Request · {{ r.request_id }}{% if r.department %} · {{ r.department }}{% endif %}</div>{% endblock %}
+{% block pagetitle %}{{ r.short_title or r.request_id }}{% if is_closed %} <span class="chip closed">closed</span>{% endif %}{% endblock %}
 {% block topactions %}
+  <a class="btn btn-ghost" href="{{ url_for('compliance_report', request_id=r.request_id) }}" target="_blank" rel="noopener" title="Open a printable / save-as-PDF report for this request">Printable report</a>
   {% if ai_enabled %}
   <form method="post" action="{{ url_for('request_audit', request_id=r.request_id) }}" class="ai-action">
     <button class="btn btn-ai" type="submit">
@@ -11,7 +12,7 @@
     </button>
   </form>
   <form method="post" action="{{ url_for('request_summarize', request_id=r.request_id) }}" class="ai-action">
-    <button class="btn" type="submit">Refresh AI summary</button>
+    <button class="btn" type="submit">{{ 'Refresh AI summary' if summary else 'Generate AI summary' }}</button>
   </form>
   <form method="post" action="{{ url_for('conversation_new') }}">
     <input type="hidden" name="scope" value="request">
@@ -29,21 +30,41 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> All requests
 </a>
 
+{% if overdue %}
+  <div class="banner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span>Open <strong>{{ days_open }} days</strong> with no substantive reply yet.</span>
+  </div>
+{% endif %}
+
+<form method="post" action="{{ url_for('request_set_title', request_id=r.request_id) }}" class="inline-form nickname-form">
+  <label class="sr-only" for="nick">Nickname</label>
+  <input type="text" name="short_title" id="nick" value="{{ r.short_title or '' }}"
+         placeholder="Give this request a short nickname (e.g. “4th St rezoning emails”)" maxlength="80" style="flex:1;max-width:480px">
+  <button class="btn btn-small" type="submit">{{ 'Update nickname' if r.short_title else 'Add nickname' }}</button>
+</form>
+
+{% if ai_enabled %}
+  <p class="muted small" style="margin:-2px 0 14px">
+    AI buttons use your Anthropic API key and may cost money; results are saved, so re-opening this page is free.
+  </p>
+{% endif %}
+
 <section class="grid-2">
   <div>
     <div class="card">
       <h3>Details</h3>
       <dl class="kv">
-        <dt>Status</dt><dd>{{ r.status or '—' }} <span class="muted small">/ portal: {{ r.final_state or '—' }}</span></dd>
+        <dt>Status</dt><dd>{{ r.status or '—' }} <span class="muted small">({{ r.final_state or '—' }}, as the portal reports it)</span></dd>
         <dt>Type</dt><dd>{{ r.request_type or '—' }}</dd>
         <dt>Category</dt><dd>{{ r.category or '—' }}</dd>
         <dt>Department</dt><dd>{{ r.department or '—' }}</dd>
         <dt>Records type</dt><dd>{{ r.records_type or '—' }}</dd>
         <dt>Preferred method</dt><dd>{{ r.preferred_method or '—' }}</dd>
         <dt>Submitted</dt><dd class="tnum">{{ r.submission_time|fmt_dt or '—' }}</dd>
-        <dt>First auto-ack</dt><dd class="tnum">{{ r.first_auto_ack_time|fmt_dt or '—' }}</dd>
-        <dt>First real reply</dt><dd class="tnum">{{ r.first_real_reply_time|fmt_dt or '—' }}</dd>
-        <dt>Time to reply</dt><dd class="tnum">{{ r.hours_to_first_reply|fmt_hours }}</dd>
+        <dt title="The first automatic 'we received your request' acknowledgement.">First automatic reply</dt><dd class="tnum">{{ r.first_auto_ack_time|fmt_dt or '—' }}</dd>
+        <dt title="The first real, substantive reply (records, a fee estimate, or a determination) — not the auto-acknowledgement. Drives 'Time to reply'.">First real reply</dt><dd class="tnum">{{ r.first_real_reply_time|fmt_dt or '—' }}</dd>
+        <dt title="Time from submission to the first real reply.">Time to reply</dt><dd class="tnum">{{ r.hours_to_first_reply|fmt_hours }}</dd>
         <dt>Last modified</dt><dd class="tnum">{{ r.last_modified_at|fmt_dt or '—' }}</dd>
       </dl>
     </div>
@@ -76,7 +97,7 @@
 
   <div>
     <div class="card">
-      <h3>Manual override</h3>
+      <h3>Adjust this request</h3>
       <form method="post" action="{{ url_for('request_override', request_id=r.request_id) }}" class="stack">
         <label class="check">
           <input type="checkbox" name="is_closed" value="1" {{ 'checked' if override and override.is_closed }}>
@@ -87,24 +108,28 @@
         <div class="field">
           <label for="fr-select">First real reply</label>
           <select name="first_real_reply_message_id" id="fr-select">
-            <option value="">— auto-detect —</option>
+            <option value="">— detect automatically —</option>
             {% for m in messages %}
               <option value="{{ m.message_id }}" {{ 'selected' if override and override.first_real_reply_message_id == m.message_id }}>
-                {{ m.sent_at|fmt_dt }} · {{ m.sender[:22] }}{% if m.subject %} · {{ m.subject[:30] }}{% endif %}
+                {{ 'City' if m._is_support else 'You' }} · {{ m.sent_at|fmt_dt }}{% if m.subject %} · {{ m.subject[:30] }}{% endif %}
               </option>
             {% endfor %}
           </select>
+          <span class="muted small">Tip: you can also click “☆ set first reply” on a message below.</span>
         </div>
         <div class="field">
           <label for="ov-notes">Notes</label>
           <textarea name="notes" id="ov-notes" rows="2">{{ (override.notes if override else '') or '' }}</textarea>
         </div>
-        <button type="submit" class="btn btn-small">Save override</button>
+        <button type="submit" class="btn btn-small">Save corrections</button>
       </form>
     </div>
 
-    <div class="card">
-      <h3>Compliance issues {% if issues %}<span class="count-pill">{{ issues|length }}</span>{% endif %}</h3>
+    <div class="card" id="issues">
+      <div class="card-title" style="justify-content:space-between;align-items:baseline">
+        <h3 style="margin:0">Compliance issues {% if issues %}<span class="count-pill">{{ issues|length }}</span>{% endif %}</h3>
+        {% if issues %}<a class="muted small" href="{{ url_for('compliance_dashboard') }}#{{ r.request_id }}">View in Compliance →</a>{% endif %}
+      </div>
       {% if issues %}
         <ul class="issue-list">
           {% for iss in issues %}
@@ -112,39 +137,51 @@
               <div class="issue-head">
                 <span class="issue-type">{{ iss.issue_type }}</span>
                 <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
-                {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
-                <span class="chip">{{ iss.status }}</span>
+                {% if iss.ai_confidence is not none %}<span class="chip conf-badge" title="How confident the AI is this is a real violation">{{ (iss.ai_confidence*100)|round|int }}% AI confidence</span>{% endif %}
+                <span class="chip status-{{ iss.status }}">{{ iss.status }}</span>
               </div>
-              {% if iss.statute_section %}<div class="issue-meta">§ {{ iss.statute_section }} · by {{ iss.identified_by }}</div>{% endif %}
+              <div class="issue-meta">{% if iss.statute_section %}§ {{ iss.statute_section }} · {% endif %}logged by {{ iss.identified_by }}</div>
               <div class="small" style="margin:5px 0">{{ iss.description }}</div>
               {% if iss.evidence %}<div class="muted small">Evidence: {{ iss.evidence[:300] }}</div>{% endif %}
-              <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form" style="margin-top:7px">
-                <label class="sr-only" for="st-{{ iss.issue_id }}">Status</label>
-                <select name="status" id="st-{{ iss.issue_id }}">
-                  {% for s in ['open','resolved','dismissed'] %}<option value="{{ s }}" {{ 'selected' if iss.status == s }}>{{ s }}</option>{% endfor %}
-                </select>
-                <button class="btn btn-small" type="submit">Update</button>
-              </form>
+              {% if iss.user_notes %}<div class="small" style="margin-top:3px">Notes: {{ iss.user_notes }}</div>{% endif %}
+              <div class="inline-form" style="margin-top:7px">
+                <form method="post" action="{{ url_for('compliance_update', issue_id=iss.issue_id) }}" class="inline-form">
+                  <label class="sr-only" for="sev-{{ iss.issue_id }}">Severity</label>
+                  <select name="severity" id="sev-{{ iss.issue_id }}">
+                    <option value="">— severity —</option>
+                    {% for s in ['low','medium','high'] %}<option value="{{ s }}" {{ 'selected' if iss.severity == s }}>{{ s }}</option>{% endfor %}
+                  </select>
+                  <label class="sr-only" for="st-{{ iss.issue_id }}">Status</label>
+                  <select name="status" id="st-{{ iss.issue_id }}">
+                    {% for s in ['open','resolved','dismissed'] %}<option value="{{ s }}" {{ 'selected' if iss.status == s }}>{{ s }}</option>{% endfor %}
+                  </select>
+                  <label class="sr-only" for="note-{{ iss.issue_id }}">Notes</label>
+                  <input type="text" name="user_notes" id="note-{{ iss.issue_id }}" value="{{ iss.user_notes or '' }}" placeholder="notes">
+                  <button class="btn btn-small" type="submit">Save</button>
+                </form>
+                <form method="post" action="{{ url_for('compliance_delete', issue_id=iss.issue_id) }}" onsubmit="return confirm('Delete this issue?')">
+                  <button class="btn btn-small btn-danger" type="submit">Delete</button>
+                </form>
+              </div>
             </li>
           {% endfor %}
         </ul>
       {% else %}
-        <p class="muted small">No issues logged.{% if ai_enabled %} Use “Run Chapter 119 audit” above.{% endif %}</p>
+        <p class="muted small">No issues logged for this request yet.{% if ai_enabled %} Run a Chapter 119 audit above, or log one below.{% else %} Log one below.{% endif %}</p>
       {% endif %}
-      <details class="disclosure">
-        <summary>Log an issue manually</summary>
-        <div class="body">
-          <form method="post" action="{{ url_for('compliance_new') }}" class="stack">
-            <input type="hidden" name="request_id" value="{{ r.request_id }}">
-            <div class="field"><label>Issue type</label><input type="text" name="issue_type" placeholder="e.g. excessive_fee" required></div>
-            <div class="field"><label>Statute section</label><input type="text" name="statute_section" placeholder="119.07(1)(a)"></div>
-            <div class="field"><label>Severity</label>
-              <select name="severity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
-            <div class="field"><label>Description</label><textarea name="description" rows="2" required></textarea></div>
-            <button class="btn btn-small btn-primary" type="submit">Log issue</button>
-          </form>
-        </div>
-      </details>
+
+      <h4 style="margin:16px 0 4px">Log a compliance issue</h4>
+      <p class="muted small" style="margin:0 0 8px">For <strong>{{ r.request_id }}</strong> — {{ r.department or 'no dept' }}{% if r.description %} · {{ r.description[:70] }}{{ '…' if r.description|length > 70 }}{% endif %}</p>
+      <form method="post" action="{{ url_for('compliance_new') }}" class="stack">
+        <input type="hidden" name="request_id" value="{{ r.request_id }}">
+        <div class="field"><label>Issue type</label><input type="text" name="issue_type" placeholder="e.g. Excessive fee" required></div>
+        <div class="field"><label>Statute section</label><input type="text" name="statute_section" placeholder="e.g. 119.07(1)(a) — optional"></div>
+        <div class="field"><label>Severity</label>
+          <select name="severity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+        <div class="field"><label>Description</label><textarea name="description" rows="2" required></textarea></div>
+        <div class="field"><label>Evidence (quote / message id)</label><textarea name="evidence" rows="2"></textarea></div>
+        <button class="btn btn-small btn-primary" type="submit">Log issue for this request</button>
+      </form>
     </div>
 
     <div class="card">
@@ -162,14 +199,21 @@
 </section>
 
 <h2>Messages <span class="muted">({{ messages|length }})</span></h2>
+<p class="muted small" style="margin:-6px 0 10px;max-width:80ch">
+  Message labels: <strong>auto-reply</strong> = automatic acknowledgement ·
+  <strong>status update</strong> = work ongoing, nothing delivered ·
+  <strong>substantive</strong> = records, a fee estimate, or a determination
+  (the first substantive city message becomes your “first real reply”) ·
+  <strong>other</strong>.
+</p>
 <div class="messages">
   {% for m in messages %}
     <div class="msg {{ 'msg-support' if m._is_support else 'msg-you' }}">
       <div class="msg-head">
         <span class="who">{{ m.sender }}</span>
         <span class="muted small tnum">{{ m.sent_at|fmt_dt }}</span>
-        {% if m._classification %}<span class="chip cls-{{ m._classification }}">{{ m._classification }}</span>{% endif %}
-        {% if m.is_auto_ack %}<span class="chip">auto-ack</span>{% endif %}
+        {% if m._classification %}<span class="chip cls-{{ m._classification }}" title="AI-assigned message type">{{ m._classification|replace('_',' ') }}</span>{% endif %}
+        {% if m.is_auto_ack %}<span class="chip" title="Automatic 'we received your request' acknowledgement">auto-reply</span>{% endif %}
         {% if m._is_support %}
           <form method="post" action="{{ url_for('request_set_first_reply', request_id=r.request_id) }}" class="first-reply-btn">
             <input type="hidden" name="message_id" value="{{ m.message_id }}">
@@ -188,6 +232,8 @@
 
 <h2>Attachments <span class="muted">({{ attachments|length }})</span></h2>
 {% if attachments %}
+  {% set with_text = attachments|selectattr('_text')|list|length %}
+  {% if with_text %}<p class="muted small" style="margin:-6px 0 10px">{{ with_text }} file(s) have searchable extracted text — expand “View extracted text” under a file to read what the AI sees.</p>{% endif %}
   {% set failed = attachments|selectattr('download_status','equalto','failed')|list %}
   {% if failed %}
     <div class="banner">

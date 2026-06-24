@@ -29,6 +29,13 @@ DEFAULT_CONFIG = {
     "polite_delay_seconds": 1.5,
     "download_attachments": True,
     "skip_already_downloaded": True,
+    "_models_comment": (
+        "Optional. Override the AI model used per task to tune cost vs. quality, "
+        "e.g. add  \"models\": {\"summarize\": \"claude-haiku-4-5-20251001\"}  to "
+        "make summaries cheaper. Keys: classify, summarize, audit, chat, ask. "
+        "Omit this and the program uses its tuned defaults (cheap Haiku for "
+        "classification, Sonnet where reasoning matters), which update with the program."
+    ),
     "human_delay": {
         "records": {
             "min_seconds": 20,

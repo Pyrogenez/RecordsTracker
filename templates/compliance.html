@@ -27,8 +27,8 @@
 
 {% if issues %}
   {% for rid, rows in by_request.items() %}
-    <section class="compliance-group">
-      <h2><a href="{{ url_for('request_detail', request_id=rid) }}">{{ rid }}</a>
+    <section class="compliance-group" id="{{ rid }}">
+      <h2><a href="{{ url_for('request_detail', request_id=rid) }}">{{ (reqs[rid]|request_label) if reqs.get(rid) else rid }}</a>
         <span class="muted small">{{ rows|length }} issue(s)</span></h2>
       <ul class="issue-list">
         {% for iss in rows %}
@@ -38,7 +38,7 @@
               <span class="chip {{ iss.severity|severity_class }}">{{ iss.severity or '?' }}</span>
               {% if iss.ai_confidence is not none %}<span class="chip conf-badge">{{ (iss.ai_confidence*100)|round|int }}% conf</span>{% endif %}
               <span class="chip">by {{ iss.identified_by }}</span>
-              <span class="chip {{ 'open' if iss.status=='open' }}">{{ iss.status }}</span>
+              <span class="chip status-{{ iss.status }}">{{ iss.status }}</span>
             </div>
             {% if iss.statute_section %}<div class="issue-meta">§ {{ iss.statute_section }}</div>{% endif %}
             <div style="margin:6px 0">{{ iss.description }}</div>
@@ -82,11 +82,12 @@
     <label for="new-rid">Request</label>
     <select name="request_id" id="new-rid" required>
       <option value="">— choose a request —</option>
-      {% for rid in all_request_ids %}<option value="{{ rid }}">{{ rid }}</option>{% endfor %}
+      {% for r in all_requests %}<option value="{{ r.request_id }}">{{ r|request_label }}</option>{% endfor %}
     </select>
+    <span class="muted small">Tip: it's easier to log an issue from the request's own page — open a request and use “Log a compliance issue”.</span>
   </div>
-  <div class="field"><label for="new-statute">Statute section</label><input type="text" name="statute_section" id="new-statute" placeholder="119.07(1)(a)"></div>
-  <div class="field"><label for="new-type">Issue type</label><input type="text" name="issue_type" id="new-type" placeholder="unreasonable_delay" required></div>
+  <div class="field"><label for="new-statute">Statute section</label><input type="text" name="statute_section" id="new-statute" placeholder="e.g. 119.07(1)(a) — optional"></div>
+  <div class="field"><label for="new-type">Issue type</label><input type="text" name="issue_type" id="new-type" placeholder="e.g. Excessive fee" required></div>
   <div class="field"><label for="new-sev">Severity</label>
     <select name="severity" id="new-sev"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
   <div class="field"><label for="new-desc">Description</label><textarea name="description" id="new-desc" rows="3" required></textarea></div>

@@ -19,6 +19,9 @@ It does not submit records requests, modify portal state, or accept any
 terms on the user's behalf. It only GETs pages and triggers attachment
 downloads.
 
+It runs on **Windows and macOS** (the Python is cross-platform; double-click
+`.bat` files on Windows, `.command` files on macOS).
+
 The program has four layers:
 
 1. **Scraper** (`run.py` + `records_tracker/scraper.py`) — Playwright-based
@@ -85,7 +88,8 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 
 ```
 <install folder>/
-├── Install.bat, Start.bat, Scrape.bat, FullScrape.bat, Update.bat
+├── Install.bat, Start.bat, Scrape.bat, FullScrape.bat, Update.bat   (Windows)
+├── Install.command, Start.command, … , Update.command              (macOS)
 ├── setup_wizard.py            first-run config wizard
 ├── VERSION.txt                current installed version
 ├── README.txt                 plain-English user-facing docs
@@ -203,6 +207,22 @@ Full schema is in `records_tracker/database.py` under `SCHEMA = """..."""`.
 - **Triggering work from the UI.** The Runs & Sync page can start a scrape or
   `analyze.py all` as a background job; only one of each runs at a time
   (overlapping portal logins would defeat the anti-detection pacing).
+- **Human-readable request labels.** Requests have opaque IDs
+  (`P121302-042026`). `database.request_label(row)` builds a one-line label
+  (id · nickname-or-department · description snippet) reused in pickers,
+  group headings, AI context, and titles. Users can set a per-request nickname
+  (`short_title`, added by migration) on the detail page; it leads the label
+  when present. Compliance issues are logged primarily from a request's own
+  page (pre-filled), not the global dropdown.
+- **AI cost control (cheap without sacrificing quality).** Defaults: Haiku for
+  high-volume message classification; Sonnet for audits/chat/summaries; never
+  Opus. The ~12 KB Chapter 119 reference is sent with `cache_control: ephemeral`
+  on audits + chat, and chat also caches the per-conversation record/corpus
+  context, so repeat calls are largely cache hits. Work is incremental (no
+  re-classify / re-summarize / re-audit of unchanged items), context and
+  `max_tokens` are bounded, and the scraper makes ZERO API calls. Per-task model
+  ids can be overridden in `config.json` under `"models"` (keys: classify,
+  summarize, audit, chat, ask) — resolved by `ai.model_for`.
 - **The scraper is read-only** by design. It never clicks Submit,
   never accepts terms, never sends messages, never changes passwords.
   Only reads + triggers attachment downloads.

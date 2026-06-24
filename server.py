@@ -32,7 +32,7 @@ from flask import (
 
 from records_tracker import ai as ai_mod
 from records_tracker.config import PROJECT_ROOT, project_paths
-from records_tracker.database import Database, is_support_sender
+from records_tracker.database import Database, is_support_sender, request_label
 from records_tracker.mdlite import looks_like_json, markdown_to_html
 
 log = logging.getLogger("server")
@@ -204,7 +204,14 @@ def create_app() -> Flask:
     def md(value):
         return markdown_to_html(value)
 
+    @app.template_filter("mode_label")
+    def mode_label(value):
+        # Display label for a run mode; the stored value stays incremental/full.
+        return {"incremental": "Quick check", "full": "Full re-check"}.get(
+            (value or "").lower(), value or "?")
+
     app.jinja_env.filters["looks_like_json"] = looks_like_json
+    app.jinja_env.filters["request_label"] = request_label
 
     # ----- shared template context -----
     app.config["APP_VERSION"] = _app_version()
@@ -282,27 +289,45 @@ def create_app() -> Flask:
         conversations = db.list_conversations(scope="request", request_id=request_id)
         is_closed = db.is_request_closed(request_id, r.get("final_state"))
         assessment = _audit_assessment(db, request_id)
+        # Carry the dashboard's "overdue" context onto the record itself: open,
+        # no substantive reply, submitted more than OVERDUE_DAYS ago.
+        days_open = None
+        if not is_closed and not r.get("first_real_reply_time") and r.get("submission_time"):
+            try:
+                dt = datetime.fromisoformat(str(r["submission_time"]).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                days_open = (datetime.now(timezone.utc) - dt).days
+            except Exception:
+                days_open = None
+        overdue = days_open is not None and days_open >= OVERDUE_DAYS
         return render_template(
             "request_detail.html", r=r, is_closed=is_closed, messages=messages,
             attachments=attachments, override=override, summary=summary,
             issues=issues, conversations=conversations, assessment=assessment,
+            days_open=days_open, overdue=overdue,
         )
 
     @app.route("/requests/<request_id>/audit", methods=["POST"])
     def request_audit(request_id: str):
         db = get_db()
+        anchor = ""
         try:
             result = ai_mod.audit_request_compliance(db, request_id)
             n = len(result.get("issues") or [])
             flash(f"Audit complete — {n} issue(s) found.", "ok")
+            if n:
+                anchor = "#issues"  # jump straight to the findings
         except ai_mod.AIConfigError as e:
             flash(str(e), "err")
         except ai_mod.AIResponseError as e:
             flash(str(e), "warn")
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             log.exception("audit failed")
-            flash(f"Audit failed: {e}", "err")
-        return redirect(url_for("request_detail", request_id=request_id))
+            flash("The audit didn't go through. Check your internet connection and "
+                  "that your Anthropic API key in config.json is valid, then try again.",
+                  "err")
+        return redirect(url_for("request_detail", request_id=request_id) + anchor)
 
     @app.route("/requests/<request_id>/summarize", methods=["POST"])
     def request_summarize(request_id: str):
@@ -312,9 +337,19 @@ def create_app() -> Flask:
             flash("Summary refreshed.", "ok")
         except ai_mod.AIConfigError as e:
             flash(str(e), "err")
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             log.exception("summarize failed")
-            flash(f"Summarize failed: {e}", "err")
+            flash("Couldn't generate the summary. Check your internet connection and "
+                  "your Anthropic API key in config.json, then try again.", "err")
+        return redirect(url_for("request_detail", request_id=request_id))
+
+    @app.route("/requests/<request_id>/title", methods=["POST"])
+    def request_set_title(request_id: str):
+        db = get_db()
+        if not db.get_request(request_id):
+            abort(404)
+        db.set_short_title(request_id, request.form.get("short_title"))
+        flash("Nickname saved.", "ok")
         return redirect(url_for("request_detail", request_id=request_id))
 
     @app.route("/requests/<request_id>/override", methods=["POST"])
@@ -428,9 +463,11 @@ def create_app() -> Flask:
             ai_mod.continue_conversation(db, conversation_id, user_text)
         except ai_mod.AIConfigError as e:
             flash(str(e), "err")
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             log.exception("chat failed")
-            flash(f"Chat failed: {e}", "err")
+            flash("The AI reply didn't go through. Check your internet connection and "
+                  "your Anthropic API key in config.json, then try again. "
+                  "Your message wasn't sent — you can resend it.", "err")
         return redirect(url_for("conversation_view", conversation_id=conversation_id))
 
     @app.route("/conversations/<int:conversation_id>/rename", methods=["POST"])
@@ -475,10 +512,11 @@ def create_app() -> Flask:
         by_request: dict[str, list[dict]] = {}
         for iss in issues:
             by_request.setdefault(iss["request_id"], []).append(iss)
-        all_request_ids = [r["request_id"] for r in db.get_all_requests()]
+        all_requests = db.get_all_requests()
+        reqs = {r["request_id"]: r for r in all_requests}
         return render_template(
             "compliance.html", issues=issues, by_request=by_request,
-            status_filter=status_filter, all_request_ids=all_request_ids,
+            status_filter=status_filter, all_requests=all_requests, reqs=reqs,
         )
 
     @app.route("/compliance/report")
@@ -628,7 +666,7 @@ def create_app() -> Flask:
             "requests_summarized": counts["summarized_requests"],
         }
         return render_template("runs.html", recent=recent, coverage=coverage,
-                               counts=counts)
+                               counts=counts, has_baseline=db.has_baseline_run())
 
     @app.route("/actions/scrape", methods=["POST"])
     def action_scrape():

@@ -36,7 +36,7 @@
   <div class="banner info">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
     <span>
-      Last sync: <strong>{{ last_run.mode or '?' }}</strong> —
+      Last sync: <strong>{{ last_run.mode|mode_label }}</strong> —
       {{ (last_run.finished_at or '(running…)')|fmt_dt }} ·
       {{ last_run.requests_scraped }} scraped, {{ last_run.new_requests }} new,
       {{ last_run.new_messages }} msgs, {{ last_run.new_attachments }} files
@@ -68,7 +68,7 @@
         <th class="sortable" data-key="dept">Dept <span class="arrow">↕</span></th>
         <th class="sortable" data-key="status">Status <span class="arrow">↕</span></th>
         <th class="sortable" data-key="submitted">Submitted <span class="arrow">↕</span></th>
-        <th>First reply</th>
+        <th>First real reply</th>
         <th class="sortable" data-key="hours">Time to reply <span class="arrow">↕</span></th>
         <th class="sortable" data-key="issues">Issues <span class="arrow">↕</span></th>
         <th></th>
@@ -137,7 +137,7 @@
       row.style.display = hit ? '' : 'none';
       if (hit) shown++;
     });
-    if (counter) counter.textContent = shown + ' shown';
+    if (counter) counter.textContent = shown + ' of {{ total_count }}';
   }
   if (search) search.addEventListener('input', applySearch);
 

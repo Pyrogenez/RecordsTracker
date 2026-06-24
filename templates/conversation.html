@@ -48,6 +48,7 @@
   <div id="chat-end"></div>
 </div>
 
+<p class="muted small" style="margin:14px 0 0">Each message calls the Anthropic API (your key) and may cost a little; the saved thread is free to re-open.</p>
 <form method="post" action="{{ url_for('conversation_send', conversation_id=conv.conversation_id) }}" class="chat-input ai-action">
   <label class="sr-only" for="chat-msg">Your message</label>
   <textarea name="message" id="chat-msg" rows="3"

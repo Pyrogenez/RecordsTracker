@@ -34,8 +34,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from records_tracker import ai as ai_mod
 from records_tracker.config import PROJECT_ROOT, load_config, project_paths
-from records_tracker.database import Database, is_support_sender
+from records_tracker.database import Database, is_support_sender, request_label
 from records_tracker.excel_export import write_workbook
 
 log = logging.getLogger("analyze")
@@ -226,7 +227,7 @@ _CLASSIFY_SYSTEM = (
 )
 
 
-def _classify_one(client, message: dict) -> dict:
+def _classify_one(client, message: dict, model: str = MODEL_CLASSIFY) -> dict:
     prompt = (
         f"Request: {message['request_id']}\n"
         f"Sender: {message['sender']}\n"
@@ -235,7 +236,7 @@ def _classify_one(client, message: dict) -> dict:
         f"Body:\n{(message.get('body') or '')[:4000]}\n"
     )
     resp = client.messages.create(
-        model=MODEL_CLASSIFY,
+        model=model,
         max_tokens=400,
         system=_CLASSIFY_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
@@ -281,16 +282,17 @@ def command_classify(db: Database, limit: int | None = None,
         log.info("No messages need classification.")
         return 0
     client = _require_anthropic_client()
-    log.info("Classifying %d message(s) with %s...", len(pending), MODEL_CLASSIFY)
+    model = ai_mod.model_for("classify", MODEL_CLASSIFY)
+    log.info("Classifying %d message(s) with %s...", len(pending), model)
     for i, m in enumerate(pending, 1):
         try:
-            res = _classify_one(client, m)
+            res = _classify_one(client, m, model)
             db.upsert_message_classification(
                 m["message_id"],
                 res["classification"],
                 res["confidence"],
                 res["reasoning"],
-                MODEL_CLASSIFY,
+                model,
             )
             log.info("  [%d/%d] msg=%d req=%s -> %s",
                      i, len(pending), m["message_id"], m["request_id"],
@@ -405,21 +407,22 @@ def command_summarize(db: Database, force: bool = False,
         log.info("No requests need summarization. (Use --force to redo existing.)")
         return 0
     client = _require_anthropic_client()
-    log.info("Summarizing %d request(s) with %s...", len(todo), MODEL_SUMMARIZE)
+    model = ai_mod.model_for("summarize", MODEL_SUMMARIZE)
+    log.info("Summarizing %d request(s) with %s...", len(todo), model)
     for i, r in enumerate(todo, 1):
         context = _pack_request_context(db, r["request_id"])
         if not context:
             continue
         try:
             resp = client.messages.create(
-                model=MODEL_SUMMARIZE,
+                model=model,
                 max_tokens=600,
                 system=_SUMMARIZE_SYSTEM,
                 messages=[{"role": "user", "content": context[:40000]}],
             )
             text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
             if text:
-                db.upsert_request_summary(r["request_id"], text, MODEL_SUMMARIZE)
+                db.upsert_request_summary(r["request_id"], text, model)
                 log.info("  [%d/%d] %s — summarized (%d chars)",
                          i, len(todo), r["request_id"], len(text))
         except Exception as e:  # noqa: BLE001
@@ -443,7 +446,7 @@ def _build_corpus(db: Database, only_request: str | None) -> str:
     for r in db.get_all_requests():
         rid = r["request_id"]
         block = [
-            f"### {rid}",
+            f"### {request_label(r)}",
             f"type={r.get('request_type')}, dept={r.get('department')}, "
             f"status={r.get('status')}/{r.get('final_state')}",
             f"submitted={r.get('submission_time')}, "
@@ -484,7 +487,7 @@ def command_ask(db: Database, question: str, only_request: str | None = None) ->
         corpus = corpus[:max_chars] + "\n\n[...truncated...]"
     user_msg = f"Context:\n{corpus}\n\n---\n\nQuestion: {question}"
     resp = client.messages.create(
-        model=MODEL_ASK,
+        model=ai_mod.model_for("ask", MODEL_ASK),
         max_tokens=1500,
         system=_ASK_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],

@@ -17,15 +17,33 @@ from typing import Any
 
 from .chapter119 import CHAPTER_119_REFERENCE, short_system_prefix
 from .config import PROJECT_ROOT
-from .database import Database
+from .database import Database, request_label
 
 log = logging.getLogger(__name__)
 
-# Model selection
+# Model selection — defaults chosen for low cost without sacrificing quality:
+# cheap Haiku for high-volume classification; Sonnet where reasoning quality
+# matters (audits, chat, summaries). Any of these can be overridden in
+# config.json under a "models" section, e.g.
+#   "models": {"classify": "...", "summarize": "...", "audit": "...", "chat": "..."}
 MODEL_CLASSIFY = "claude-haiku-4-5-20251001"
 MODEL_CHAT = "claude-sonnet-4-6"
 MODEL_AUDIT = "claude-sonnet-4-6"
 MODEL_SUMMARIZE = "claude-sonnet-4-6"
+
+
+def model_for(key: str, default: str) -> str:
+    """Resolve a model id from config.json's optional 'models' section, falling
+    back to the default. Lets the user tune the cost/quality trade-off without
+    code changes."""
+    try:
+        raw = json.loads((PROJECT_ROOT / "config.json").read_text())
+        m = (raw.get("models") or {}).get(key)
+        if m and isinstance(m, str) and m.strip():
+            return m.strip()
+    except Exception:
+        pass
+    return default
 
 # Retries for transient API errors (529/rate-limit/network) on top of the SDK's
 # own handling, so a brief blip doesn't surface as a raw error to the user.
@@ -109,19 +127,28 @@ def _log_usage(resp, label: str) -> None:
     )
 
 
-def _system_blocks(task_description: str = "") -> list[dict]:
+def _system_blocks(task_description: str = "",
+                   context_block: str | None = None) -> list[dict]:
     """System prompt as content blocks with the large Chapter 119 reference
     marked cache_control=ephemeral. The reference is identical across audits and
     chat turns, so prompt caching makes repeat calls cheaper and faster. The
-    small role+task header stays uncached because it varies per call."""
+    small role+task header stays uncached because it varies per call.
+
+    For multi-turn chat, pass context_block (the request/corpus context) so it
+    too is cached — every turn after the first then reuses it instead of
+    re-sending the whole record/corpus, a real token saving on long chats."""
     header = short_system_prefix()
     if task_description:
         header = header + "\n\n" + task_description.strip()
-    return [
+    blocks = [
         {"type": "text", "text": header},
         {"type": "text", "text": CHAPTER_119_REFERENCE,
          "cache_control": {"type": "ephemeral"}},
     ]
+    if context_block:
+        blocks.append({"type": "text", "text": context_block,
+                       "cache_control": {"type": "ephemeral"}})
+    return blocks
 
 
 def _merge_consecutive_roles(turns: list[dict]) -> list[dict]:
@@ -226,7 +253,7 @@ def build_corpus_digest(db: Database, max_chars: int = 160_000) -> str:
     for r in db.get_all_requests():
         rid = r["request_id"]
         block = [
-            f"### {rid}",
+            f"### {request_label(r)}",
             f"status={r.get('status')}/{r.get('final_state')}, "
             f"dept={r.get('department')}, type={r.get('request_type')}",
             f"submitted={r.get('submission_time')}, "
@@ -262,19 +289,22 @@ def build_corpus_digest(db: Database, max_chars: int = 160_000) -> str:
 
 _CHAT_TASK = (
     "You're helping the user analyze his public records requests. Respond clearly "
-    "and concisely. Cite specific requests by their ID (e.g. P121302-042026) "
-    "when discussing them. When making legal claims, cite the specific statute "
-    "section or case name from the reference. If you don't have enough "
-    "information in the context to answer, say so — don't invent facts."
+    "and concisely. When you refer to a request, cite its ID followed by a "
+    "short human label so it's recognizable, e.g. "
+    "'P121302-042026 (Police — body-cam footage)'. When making legal claims, "
+    "cite the specific statute section or case name from the reference. If you "
+    "don't have enough information in the context to answer, say so — don't "
+    "invent facts."
 )
 
 
 def continue_conversation(db: Database, conversation_id: int,
                           user_message: str,
-                          model: str = MODEL_CHAT) -> str:
-    """Append a user turn, call Claude with the full thread + request context
-    (if this is a request-scoped conversation) or the corpus digest (if
-    global), save the assistant turn, and return the assistant text."""
+                          model: str | None = None) -> str:
+    """Append a user turn, call Claude with the full thread plus the request
+    context (request-scoped) or corpus digest (global), save the assistant turn,
+    and return the assistant text."""
+    model = model or model_for("chat", MODEL_CHAT)
     client = get_client()
     conv = db.get_conversation(conversation_id)
     if not conv:
@@ -287,40 +317,28 @@ def continue_conversation(db: Database, conversation_id: int,
     # permanently. Instead we save BOTH turns together only after success.
     history = db.get_conversation_messages(conversation_id)
 
-    # Build context block
+    # The record/corpus context is stable across a conversation's turns, so we
+    # send it ONCE as a cache_control system block instead of stuffing it into a
+    # user message on every turn. After the first turn it's a cache hit — a real
+    # token saving on multi-turn chats.
     if conv["scope"] == "request" and conv.get("request_id"):
-        context_block = build_request_context(db, conv["request_id"])
-        context_header = f"CONTEXT FOR REQUEST {conv['request_id']}:\n\n{context_block}"
+        context_header = (f"CONTEXT FOR REQUEST {conv['request_id']}:\n\n"
+                          + build_request_context(db, conv["request_id"]))
     else:
-        context_block = build_corpus_digest(db)
-        context_header = (
-            "CONTEXT — DIGEST OF ALL TRACKED PUBLIC RECORDS REQUESTS:\n\n"
-            + context_block
-        )
+        context_header = ("CONTEXT — DIGEST OF ALL TRACKED PUBLIC RECORDS "
+                          "REQUESTS:\n\n" + build_corpus_digest(db))
 
-    # Existing history (excluding system rows) + the new user message, held in
-    # memory; collapse any consecutive same-role turns so an already-wedged
-    # thread self-heals.
+    # Existing history (excluding system rows) + the new user message; collapse
+    # consecutive same-role turns so an already-wedged thread self-heals.
     turns = [{"role": m["role"], "content": m["content"]}
              for m in history if m["role"] != "system"]
     turns.append({"role": "user", "content": user_message})
-    turns = _merge_consecutive_roles(turns)
-
-    # The first user turn carries the context block; later turns carry only the
-    # user message so we don't blow the token budget.
-    api_messages = []
-    first_user_turn = True
-    for m in turns:
-        content = m["content"]
-        if m["role"] == "user" and first_user_turn:
-            content = context_header + "\n\n---\n\nUSER:\n" + content
-            first_user_turn = False
-        api_messages.append({"role": m["role"], "content": content})
+    api_messages = _merge_consecutive_roles(turns)
 
     resp = client.messages.create(
         model=model,
         max_tokens=2500,
-        system=_system_blocks(_CHAT_TASK),
+        system=_system_blocks(_CHAT_TASK, context_block=context_header),
         messages=api_messages,
     )
     _log_usage(resp, "chat")
@@ -375,9 +393,10 @@ def _parse_json_lenient(text: str) -> dict | None:
 
 
 def audit_request_compliance(db: Database, request_id: str,
-                             model: str = MODEL_AUDIT) -> dict:
+                             model: str | None = None) -> dict:
     """Run a Chapter 119 audit on a single request. Persists findings to the
     compliance_issues table and returns the structured result."""
+    model = model or model_for("audit", MODEL_AUDIT)
     client = get_client()
     context = build_request_context(db, request_id)
     if not context:
@@ -463,7 +482,8 @@ _SUMMARIZE_TASK = (
 
 
 def summarize_request(db: Database, request_id: str,
-                      model: str = MODEL_SUMMARIZE) -> str:
+                      model: str | None = None) -> str:
+    model = model or model_for("summarize", MODEL_SUMMARIZE)
     client = get_client()
     ctx = build_request_context(db, request_id)
     resp = client.messages.create(

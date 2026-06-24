@@ -4,6 +4,15 @@
 {% block pagetitle %}Dashboard{% endblock %}
 {% block content %}
 
+{% if counts.total_requests == 0 %}
+  <div class="empty-state">
+    <div class="big">Welcome to Records Tracker</div>
+    <p>No records yet. Go to <a href="{{ url_for('runs') }}">Runs &amp; Sync</a> and run a
+       Full scrape to pull your public-records requests from the portal — then this
+       dashboard fills in with reply times, overdue requests, and trends.</p>
+  </div>
+{% else %}
+
 <section class="kpis">
   <a class="kpi hero" href="{{ url_for('index', status='all') }}"><div class="v tnum">{{ counts.total_requests }}</div><div class="l">Requests</div></a>
   <a class="kpi hero tone-accent" href="{{ url_for('index', status='open') }}"><div class="v tnum">{{ counts.open_requests }}</div><div class="l">Open</div></a>
@@ -59,4 +68,5 @@
   {% else %}<p class="muted small">No submission dates recorded yet.</p>{% endif %}
 </div>
 
+{% endif %}
 {% endblock %}
