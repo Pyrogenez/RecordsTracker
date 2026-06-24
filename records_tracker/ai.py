@@ -288,7 +288,7 @@ def build_corpus_digest(db: Database, max_chars: int = 160_000) -> str:
 # ---------------------------------------------------------------------------
 
 _CHAT_TASK = (
-    "You're helping the user analyze his public records requests. Respond clearly "
+    "You're helping the user analyze their public records requests. Respond clearly "
     "and concisely. When you refer to a request, cite its ID followed by a "
     "short human label so it's recognizable, e.g. "
     "'P121302-042026 (Police — body-cam footage)'. When making legal claims, "

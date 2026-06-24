@@ -26,7 +26,7 @@ Two presets:
 Both accept a dict of overrides (loaded from `config.json` under the
 `human_delay` key) so the pacing is configurable without code changes.
 
-Tuning by the user / the operator:
+Tuning by the operator:
   * To run faster but riskier, lower `min_seconds` / `max_seconds`.
   * To blend in harder, raise them and/or bump `long_pause_chance`.
   * The DEFAULTS below are tuned for realistic reading time on the

@@ -253,8 +253,8 @@ def short_system_prefix() -> str:
     Used on the cheaper classification calls where loading the full
     reference would be wasteful."""
     return (
-        "You assist the requester, a resident of St. Petersburg, FL, in tracking "
-        "his public records requests to the City of St. Petersburg. You have "
+        "You assist a St. Petersburg, FL resident in tracking their public "
+        "records requests to the City of St. Petersburg. You have "
         "working knowledge of Florida Public Records Law (Chapter 119 of the "
         "Florida Statutes) and relevant Florida case law. Your statutory and "
         f"case-law reference is current as of {REFERENCE_AS_OF}; flag when an "
