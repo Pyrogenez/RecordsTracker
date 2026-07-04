@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Search — St. Pete Records Tracker{% endblock %}
+{% block eyebrow %}<div class="eyebrow">Full-text search</div>{% endblock %}
+{% block pagetitle %}Search{% endblock %}
+{% block content %}
+
+<form method="get" action="{{ url_for('search') }}" class="toolbar" style="margin-bottom:18px">
+  <div class="search" style="max-width:560px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <input type="search" name="q" value="{{ q }}" autofocus
+           placeholder="Search every request, message, and attachment…" aria-label="Search">
+  </div>
+  <button class="btn btn-primary" type="submit">Search</button>
+  {% if q %}<span class="muted small">{{ total }} request(s) match “{{ q }}”</span>{% endif %}
+</form>
+
+{% if not q %}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <div class="big">Search across everything</div>
+    <p>Find words across all your request descriptions, the city's messages, and the
+       text inside downloaded attachments — e.g. <code>body camera</code>, <code>fee</code>,
+       <code>4th Street</code>.</p>
+  </div>
+{% elif not results %}
+  <div class="empty-state"><div class="big">No matches for “{{ q }}”</div>
+    <p>Try fewer or different words. Attachment text only matches after AI analysis has
+       extracted it (Runs &amp; Sync → Run AI analysis).</p></div>
+{% else %}
+  {% for r in results %}
+    <div class="card">
+      <h3 style="margin-top:0"><a class="req-id" href="{{ url_for('request_detail', request_id=r.request_id) }}">{{ r.label }}</a></h3>
+      <ul class="stack" style="list-style:none;padding:0;margin:0;gap:8px">
+        {% for h in r.hits[:6] %}
+          <li>
+            <span class="chip {{ 'cls-substantive' if h.kind=='message' else '' }}">{{ h.kind }}</span>
+            <span class="muted small">{{ h.label }}</span>
+            <div class="md-body" style="margin-top:3px">…{{ h.snippet|highlight }}…</div>
+          </li>
+        {% endfor %}
+        {% if r.hits|length > 6 %}<li class="muted small">+ {{ r.hits|length - 6 }} more match(es) in this request.</li>{% endif %}
+      </ul>
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

@@ -71,6 +71,9 @@
       <button class="btn btn-primary" type="submit">Update now to v{{ update_info.latest }}</button>
     </form>
     {% endif %}
+    {% if update_info.available and update_info.notes_url %}
+      <a class="btn btn-ghost" href="{{ update_info.notes_url }}" target="_blank" rel="noopener">What's new ↗</a>
+    {% endif %}
     {% if update_running %}<span class="chip open dot">updating…</span>{% endif %}
   </div>
   {% if update_result and not update_running %}

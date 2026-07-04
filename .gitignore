@@ -19,3 +19,4 @@ backups/
 
 # Dev-only scaffolding (never shipped)
 _dev_seed.py
+.pytest_cache/

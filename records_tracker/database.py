@@ -841,6 +841,61 @@ class Database:
         )
         self._conn.commit()
 
+    # ---- full-text search (SQLite FTS5) ----
+    def _ensure_search_schema(self) -> None:
+        self._conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5("
+            "request_id UNINDEXED, kind UNINDEXED, label UNINDEXED, body)")
+
+    def rebuild_search_index(self) -> None:
+        """Repopulate the FTS index from request descriptions/nicknames, message
+        bodies, and extracted attachment text. Cheap at this scale; idempotent."""
+        self._ensure_search_schema()
+        c = self._conn
+        c.execute("DELETE FROM search_fts")
+        for r in c.execute("SELECT request_id, short_title, description FROM requests"):
+            text = " ".join(x for x in (r[1], r[2]) if x)
+            if text.strip():
+                c.execute("INSERT INTO search_fts(request_id,kind,label,body) "
+                          "VALUES (?,?,?,?)", (r[0], "request", "description", text))
+        for m in c.execute("SELECT request_id, sender, sent_at, body FROM messages "
+                           "WHERE body IS NOT NULL AND body <> ''"):
+            c.execute("INSERT INTO search_fts(request_id,kind,label,body) VALUES (?,?,?,?)",
+                      (m[0], "message", f"{m[1]} · {m[2]}", m[3]))
+        for a in c.execute(
+                "SELECT a.request_id, a.filename, t.extracted_text "
+                "FROM attachment_text t JOIN attachments a USING (attachment_id) "
+                "WHERE t.extracted_text IS NOT NULL AND t.extracted_text <> ''"):
+            c.execute("INSERT INTO search_fts(request_id,kind,label,body) VALUES (?,?,?,?)",
+                      (a[0], "attachment", a[1], a[2]))
+        c.commit()
+
+    def search(self, query: str, limit: int = 300) -> list[dict]:
+        """Full-text search across requests, messages, and attachment text.
+        Returns hits grouped by request with a highlighted snippet each. The index
+        is rebuilt each call — at this scale that's a few milliseconds and avoids
+        ever serving stale results."""
+        import re as _re
+        tokens = _re.findall(r"\w+", query or "")
+        if not tokens:
+            return []
+        self.rebuild_search_index()
+        match = " ".join(f'"{t}"' for t in tokens)
+        try:
+            rows = self._conn.execute(
+                "SELECT request_id, kind, label, "
+                "snippet(search_fts, 3, '<<', '>>', '…', 14) AS snip "
+                "FROM search_fts WHERE body MATCH ? "
+                "ORDER BY rank LIMIT ?", (match, limit)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        grouped: dict[str, dict] = {}
+        for r in rows:
+            d = dict(r)
+            g = grouped.setdefault(d["request_id"], {"request_id": d["request_id"], "hits": []})
+            g["hits"].append({"kind": d["kind"], "label": d["label"], "snippet": d["snip"]})
+        return list(grouped.values())
+
     def open_compliance_count(self) -> int:
         """Cheap count for the nav badge (avoids a full counts() per page)."""
         return self._conn.execute(

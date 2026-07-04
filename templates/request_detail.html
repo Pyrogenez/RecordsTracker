@@ -14,6 +14,14 @@
   <form method="post" action="{{ url_for('request_summarize', request_id=r.request_id) }}" class="ai-action">
     <button class="btn" type="submit">{{ 'Refresh AI summary' if summary else 'Generate AI summary' }}</button>
   </form>
+  <form method="post" action="{{ url_for('request_letter', request_id=r.request_id) }}" class="ai-action">
+    <input type="hidden" name="kind" value="follow_up">
+    <button class="btn" type="submit" title="Draft a polite follow-up email you can send to the city">Draft follow-up</button>
+  </form>
+  <form method="post" action="{{ url_for('request_letter', request_id=r.request_id) }}" class="ai-action">
+    <input type="hidden" name="kind" value="demand">
+    <button class="btn" type="submit" title="Draft a § 119.12 pre-suit demand letter from this record">Draft demand letter</button>
+  </form>
   <form method="post" action="{{ url_for('conversation_new') }}">
     <input type="hidden" name="scope" value="request">
     <input type="hidden" name="request_id" value="{{ r.request_id }}">

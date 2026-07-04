@@ -32,6 +32,7 @@ from flask import (
     Flask, abort, flash, g, jsonify, redirect, render_template, request,
     send_file, session, url_for,
 )
+from markupsafe import Markup, escape
 
 from records_tracker import ai as ai_mod
 from records_tracker import backup as backup_mod
@@ -216,6 +217,13 @@ def create_app() -> Flask:
     def md(value):
         return markdown_to_html(value)
 
+    @app.template_filter("highlight")
+    def highlight(snippet):
+        # Snippet text comes from FTS over portal/user data: escape it, THEN turn
+        # the safe << >> markers into <mark> highlights. Never trusts raw HTML.
+        s = str(escape(snippet or ""))
+        return Markup(s.replace("&lt;&lt;", "<mark>").replace("&gt;&gt;", "</mark>"))
+
     @app.template_filter("mode_label")
     def mode_label(value):
         # Display label for a run mode; the stored value stays incremental/full.
@@ -282,6 +290,18 @@ def create_app() -> Flask:
             counts=counts, last_run=last, status_filter=status_filter,
         )
 
+    @app.route("/search")
+    def search():
+        q = (request.args.get("q") or "").strip()
+        db = get_db()
+        results = []
+        if q:
+            for r in db.search(q):
+                req = db.get_request(r["request_id"])
+                results.append({**r, "label": request_label(req) if req else r["request_id"],
+                                "department": (req or {}).get("department")})
+        return render_template("search.html", q=q, results=results, total=len(results))
+
     @app.route("/requests/<request_id>")
     def request_detail(request_id: str):
         db = get_db()
@@ -342,6 +362,25 @@ def create_app() -> Flask:
                   "that your Anthropic API key in config.json is valid, then try again.",
                   "err")
         return redirect(url_for("request_detail", request_id=request_id) + anchor)
+
+    @app.route("/requests/<request_id>/letter", methods=["POST"])
+    def request_letter(request_id: str):
+        db = get_db()
+        if not db.get_request(request_id):
+            abort(404)
+        kind = request.form.get("kind") or "follow_up"
+        try:
+            res = ai_mod.draft_letter(db, request_id, kind=kind)
+            flash("Draft letter created — review and edit it below, then copy/print it.", "ok")
+            return redirect(url_for("conversation_view", conversation_id=res["conversation_id"]))
+        except ai_mod.AIConfigError as e:
+            flash(str(e), "err")
+        except ai_mod.AIResponseError as e:
+            flash(str(e), "warn")
+        except Exception as e:  # noqa: BLE001
+            log.exception("letter failed")
+            flash(f"Letter drafting failed: {e}", "err")
+        return redirect(url_for("request_detail", request_id=request_id))
 
     @app.route("/requests/<request_id>/summarize", methods=["POST"])
     def request_summarize(request_id: str):

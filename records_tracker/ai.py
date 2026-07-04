@@ -359,6 +359,9 @@ def continue_conversation(db: Database, conversation_id: int,
 _AUDIT_TASK = (
     "TASK: Audit this public records request for potential violations of "
     "Florida Public Records Law (Chapter 119). Be specific and conservative. "
+    "Cite ONLY statute sections and cases that appear in the reference provided "
+    "above; never invent a statute number or case name. If the record is too "
+    "incomplete to judge an issue, say so rather than guessing. "
     "Return a JSON object with an 'issues' array. Each issue object must have:\n"
     "  - statute_section   (e.g. '119.07(1)(a)' or null if general)\n"
     "  - issue_type        (short snake_case label, e.g. 'unreasonable_delay',\n"
@@ -479,6 +482,71 @@ _SUMMARIZE_TASK = (
     "(4) any red flags or notable dates. Keep it concise — 1-2 short "
     "paragraphs. Don't editorialize. If the record is pending, say so."
 )
+
+
+# ---------------------------------------------------------------------------
+# Draft a follow-up / § 119.12 demand letter from a record
+# ---------------------------------------------------------------------------
+
+_LETTER_GUARDRAIL = (
+    "Use ONLY facts that appear in the provided record and ONLY statutes/cases "
+    "that appear in the reference — do NOT invent authority, dates, fee amounts, "
+    "or facts. Write it for a layperson to review and edit; this is a draft, not "
+    "legal advice. Output the letter text only (a subject line is fine)."
+)
+
+_LETTER_TASKS = {
+    "follow_up": (
+        "Draft a brief, professional FOLLOW-UP email from the requester to the "
+        "City of St. Petersburg records custodian about this still-pending public "
+        "records request. Reference the specific request, note politely how long "
+        "it has been outstanding, ask for a status update and an estimated "
+        "completion date, and reference the 'reasonable time' standard of "
+        "§ 119.07(1)(a) without being adversarial. Keep it short and ready to send."
+    ),
+    "demand": (
+        "Draft a formal PRE-SUIT DEMAND letter from the requester to the City of "
+        "St. Petersburg records custodian for this public records request, suitable "
+        "as the written notice contemplated by § 119.12(1)(a) before a civil "
+        "enforcement action. Identify the specific request and the specific apparent "
+        "violations grounded in the record (e.g. unreasonable delay, denial without a "
+        "particularized written exemption, excessive or improper fee). State exactly "
+        "what is requested (production, a written exemption explanation with "
+        "particularity, or a corrected fee), give a reasonable deadline, and note "
+        "that reasonable costs and attorney's fees may be recoverable under § 119.12 "
+        "if the agency unlawfully refused. Firm and professional, not threatening. "
+        "Begin with 'DRAFT — for your review.'"
+    ),
+}
+
+
+def draft_letter(db: Database, request_id: str, kind: str = "follow_up",
+                 model: str | None = None) -> dict:
+    """Draft a follow-up or demand letter from a single request's record and save
+    it as a saved (request-scoped) conversation the user can review, refine, and
+    print. Returns {'conversation_id', 'text'}."""
+    model = model or model_for("chat", MODEL_CHAT)
+    if kind not in _LETTER_TASKS:
+        kind = "follow_up"
+    client = get_client()
+    context = build_request_context(db, request_id)
+    if not context or context.startswith("(No record"):
+        raise AIResponseError("No record found to draft a letter from.")
+    task = _LETTER_TASKS[kind] + "\n\n" + _LETTER_GUARDRAIL
+    resp = client.messages.create(
+        model=model, max_tokens=1600,
+        system=_system_blocks(task, context_block=(
+            f"CONTEXT FOR REQUEST {request_id}:\n\n{context}")),
+        messages=[{"role": "user",
+                   "content": f"Draft the {kind.replace('_', ' ')} letter now."}])
+    _log_usage(resp, "letter")
+    text = extract_text_response(resp).strip() or "(no response)"
+    title = ("Demand letter — " if kind == "demand" else "Follow-up letter — ") + request_id
+    conv_id = db.create_conversation("request", title, request_id=request_id)
+    db.add_conversation_message(
+        conv_id, "user", f"Draft a {kind.replace('_', ' ')} letter for this request.")
+    db.add_conversation_message(conv_id, "assistant", text, model=model)
+    return {"conversation_id": conv_id, "text": text}
 
 
 def summarize_request(db: Database, request_id: str,

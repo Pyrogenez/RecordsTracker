@@ -40,7 +40,7 @@ class BackupError(RuntimeError):
 
 
 def backups_root() -> Path:
-    return PROJECT_ROOT / "backups"
+    return project_paths()["root"] / "backups"
 
 
 def _local_version() -> str:

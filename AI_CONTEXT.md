@@ -32,7 +32,9 @@ The program has four layers:
    (reply-time analytics, overdue requests, volume by month), the **Requests**
    list (searchable / sortable / status-filterable), a per-request **detail**
    page (metadata, messages, downloadable attachments + extracted text, AI
-   summary, override controls, compliance issues, AI chat), a **Compliance**
+   summary, override controls, compliance issues, AI chat, and AI-drafted
+   follow-up / § 119.12 demand letters), a full-text **Search** page (across
+   requests, messages, and attachment text via SQLite FTS5), a **Compliance**
    dashboard (+ a printable report), **AI Analysis** (cross-record chat), and a
    **Runs & Sync** page that can trigger an incremental/full scrape or "run AI
    analysis on all" as background jobs (single-job concurrency guard) and shows
@@ -119,6 +121,9 @@ python cleanup_bad_rows.py --delete DESTRUCTIVE: permanently deletes those rows
 │
 ├── templates/                 Jinja2 templates for the Flask UI
 ├── static/                    CSS + vendored fonts (static/fonts/) for the UI
+├── tests/                     pytest suite (units + backup/update/server)
+├── .github/workflows/ci.yml   GitHub Actions: runs the tests on every push
+├── CHANGELOG.md               release notes; requirements-dev.txt = pytest
 │
 ├── venv/                      Python virtual env (created by Install.bat;
 │                              NEVER share or commit; regenerate if deleted)
@@ -242,16 +247,22 @@ Full schema is in `records_tracker/database.py` under `SCHEMA = """..."""`.
   guarded so it can never delete them. DB schema changes ship as idempotent
   additive `ALTER` migrations (see `_MIGRATIONS`) — never destructive — so the
   user's core data is preserved and just carried forward.
-- **Automatic update notifications + self-update.** When the author pushes a
-  newer `VERSION.txt` to the GitHub repo (config: `update_check` in
-  `config.json`, default `Pyrogenez/RecordsTracker`@`main`), each install sees
-  it (cached, ~6h, never blocks a page; `records_tracker/updater.py`) and the
-  web UI shows an "Update now" banner. "Update now" downloads the branch source
-  archive (`selfupdate.py apply` → `apply_update.py`) and applies it. For this
-  to reach a user, the repo (or its raw `VERSION.txt` + branch archive) must be
-  **public**; on a private/offline repo the check degrades silently to "no
-  update". Note the web "Update now" path does NOT refresh pip packages — if
-  `requirements.txt` changed, run `Update.bat`/`Update.command` (which does).
+- **Automatic update notifications + self-update.** Each install checks the
+  GitHub repo for a newer version (cached ~6h, never blocks a page;
+  `records_tracker/updater.py`) and shows an "Update now" banner. By default it
+  tracks published **releases** (`update_check.channel = "release"`) so only a
+  deliberate, tagged version reaches users; set `channel = "main"` to track the
+  branch tip. "Update now" (`selfupdate.py apply` → `apply_update.py`) downloads
+  the release/branch archive, applies it, **and refreshes pip** so a new
+  dependency can't break startup. Requires the repo to be **public**; degrades
+  silently to "no update" otherwise. "What's new" links to the release notes.
+- **Publishing a new version (for the author).** Bump `VERSION.txt` +
+  `records_tracker/__init__.py` (keep them in sync), add a `CHANGELOG.md` entry,
+  commit, then cut a GitHub release:
+  `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<changelog entry>"`.
+  CI (`.github/workflows/ci.yml`) runs the `tests/` suite (`pytest`) on every
+  push — keep it green, since a release auto-ships to users. Run tests locally
+  with `pip install -r requirements-dev.txt && pytest`.
 - **Automatic database backups + restore.** Before every update,
   `apply_update.py` snapshots `data/records.db` to `backups/<ts>__pre-update/`
   using SQLite's online-backup API (consistent + integrity-checked). Users can

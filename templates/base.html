@@ -33,6 +33,8 @@
         '<path d="M3 13h8V3H3zM13 21h8V3h-8zM3 21h8v-6H3z"/>'),
       ('index', 'Requests', ['index','request_detail'],
         '<path d="M3 5h18M3 12h18M3 19h18"/>'),
+      ('search', 'Search', ['search'],
+        '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>'),
       ('compliance_dashboard', 'Compliance', ['compliance_dashboard','compliance_report'],
         '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>'),
       ('global_analysis', 'AI Analysis', ['global_analysis','conversation_view'],
@@ -109,7 +111,7 @@
       <div class="flashes"><div class="update-banner">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
         <span>Version <strong>{{ update_info.latest }}</strong> is available — you're on {{ update_info.current }}.</span>
-        <a href="{{ update_info.repo_url }}/commits/{{ update_info.branch or 'main' }}" target="_blank" rel="noopener" class="muted small">What's new</a>
+        <a href="{{ update_info.notes_url or update_info.repo_url }}" target="_blank" rel="noopener" class="muted small">What's new</a>
         <form method="post" action="{{ url_for('action_update') }}" style="margin:0">
           <button class="btn btn-small btn-primary" type="submit">Update now</button>
         </form>

@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
         "owner": "Pyrogenez",
         "repo": "RecordsTracker",
         "branch": "main",
+        "channel": "release",
     },
     "_models_comment": (
         "Optional. Override the AI model used per task to tune cost vs. quality, "
